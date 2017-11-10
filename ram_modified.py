@@ -38,6 +38,7 @@ start_step = 0
 #load_path = None
 load_path = save_dir + save_prefix + str(start_step) + ".ckpt"
 # to enable visualization, set draw to True
+load_model = False
 eval_only = False
 draw = False
 animate = False
@@ -517,10 +518,17 @@ with tf.device('/gpu:1'):
         sess = tf.Session(config=sess_config)
 
         saver = tf.train.Saver()
-        b_fetched = np.zeros((batch_size, (nGlimpses)*2))
 
-        init = tf.global_variables_initializer()
-        sess.run(init)
+        if load_model:
+            saver.restore(sess, "./chckPts/save65000.ckpt")
+        else:
+            init = tf.global_variables_initializer()
+            sess.run(init)
+        
+        #b_fetched = np.zeros((batch_size, (nGlimpses)*2))
+
+        #init = tf.global_variables_initializer()
+        #sess.run(init)
 
         if eval_only:
             evaluate()
