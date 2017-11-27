@@ -307,7 +307,8 @@ def calc_reward(mems, glimpse_reps):
     # get the baseline
     b = tf.stack(baselines)
     b = tf.concat(axis=2, values=[b, b])
-    b = tf.reshape(b, (batch_size, (nGlimpses) * 2))
+    b = tf.transpose(b, [1,0,2]) # 6,64,2 to 64,6,2
+
     no_grad_b = tf.stop_gradient(b)
 
     # get the action(classification)
@@ -319,22 +320,34 @@ def calc_reward(mems, glimpse_reps):
     R = tf.cast(tf.equal(max_p_y, correct_y), tf.float32)
     reward = tf.reduce_mean(R) # mean reward
     R = tf.reshape(R, (batch_size, 1))
-    # TODO: (GW) likely this line will change since total future reward will
-    # now vary due to the KL intrinsic reward.
-    R = tf.tile(R, [1, (nGlimpses)*2])
+
+    # We want to add the intrinsic rewards here.
+    # TODO: in future, dont add zero at each timestep over batch item, but
+    # rather the timesteps KL-based intrinsic reward.
+    # TODO: ensure that indexing over R_intrinsic is not shifted by 1.
+    R = tf.tile(R, [1, (nGlimpses)])
+    r_intrinsic = tf.zeros(R.get_shape().as_list()) # TODO: change this line.
+    R_intrinsic = [tf.zeros([batch_size]) for _ in xrange(nGlimpses)]
+    R_intrinsic[-1] = r_intrinsic[:,-1]
+    for g_id in xrange(nGlimpses-2, -1, -1):
+            R_intrinsic[g_id] = r_intrinsic[:,g_id] + R_intrinsic[g_id + 1]
+    R_intrinsic = tf.stack(R_intrinsic, axis=1)
+
+    R += R_intrinsic
+
+    R = tf.expand_dims(R, 2)
+    R = tf.tile(R, [1, 1, 2])
 
     # get the location
 
     p_loc = gaussian_pdf(mean_locs, sampled_locs)
-    # p_loc = tf.tanh(p_loc)
-
-    p_loc_orig = p_loc
-    p_loc = tf.reshape(p_loc, (batch_size, (nGlimpses) * 2))
 
     # define the cost function
-    J = tf.concat(axis=1, values=[tf.log(p_y + SMALL_NUM) * (onehot_labels_placeholder), tf.log(p_loc + SMALL_NUM) * (R - no_grad_b)])
+    reinforce_terms = tf.reshape(tf.log(p_loc + SMALL_NUM) * (R-no_grad_b), (batch_size, nGlimpses*2))
+    reinforce_reg_terms = tf.reshape(tf.square(R-b),(batch_size, nGlimpses*2))
+    J = tf.concat(axis=1, values=[ tf.log(p_y + SMALL_NUM) * (onehot_labels_placeholder),reinforce_terms])
     J = tf.reduce_sum(J, 1)
-    J = J - tf.reduce_sum(tf.square(R - b), 1)
+    J = J - tf.reduce_sum(reinforce_reg_terms, 1)
     J = tf.reduce_mean(J, 0)
     cost = -J
     var_list = tf.trainable_variables()
