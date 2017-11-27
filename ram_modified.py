@@ -7,6 +7,8 @@ import random
 import sys
 import os
 
+import edward as ed
+from edward.models import Normal
 
 try:
     xrange
