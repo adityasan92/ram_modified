@@ -182,6 +182,8 @@ def get_glimpse(loc):
 
 def get_next_input(output):
     # the next location is computed by the location network
+    # TODO: (GW) interesting to see here that they don't backprop to diff
+    # timesteps.
     core_net_out = tf.stop_gradient(output)
 
     # baseline = tf.sigmoid(tf.matmul(core_net_out, Wb_h_b) + Bb_h_b)
@@ -205,6 +207,8 @@ def get_next_input(output):
     sample_loc = tf.maximum(-1.0, tf.minimum(1.0, mean_loc + tf.random_normal(mean_loc.get_shape(), 0, loc_sd)))
 
     # don't propagate throught the locations
+    # TODO: (GW) do they put a stop grad here to stop REINFORCE signal from
+    # affecting anything beyond the theta_l box? Seems like why they do it.
     sample_loc = tf.stop_gradient(sample_loc)
     sampled_locs.append(sample_loc)
 
@@ -249,6 +253,8 @@ def model():
         # forward prop
         with tf.variable_scope("coreNetwork", reuse=REUSE):
             # the next hidden state is a function of the previous hidden state and the current glimpse
+            # TODO: (gw) why didn't they just define the affine Transform
+            # weights below and not use the REUSE flag?
             hiddenState = tf.nn.relu(affineTransform(hiddenState_prev, cell_size) + (tf.matmul(glimpse, Wc_g_h) + Bc_g_h))
 
         # save the current glimpse and the hidden state
@@ -285,9 +291,11 @@ def gaussian_pdf(mean, sample):
 
 
 def calc_reward(outputs):
+    # outputs are the sequence of hidden states.
 
     # consider the action at the last time step
     outputs = outputs[-1] # look at ONLY THE END of the sequence
+    # TODO: (Grant) is this line necessary? Seems like its already this size
     outputs = tf.reshape(outputs, (batch_size, cell_out_size))
 
     # get the baseline
@@ -305,6 +313,8 @@ def calc_reward(outputs):
     R = tf.cast(tf.equal(max_p_y, correct_y), tf.float32)
     reward = tf.reduce_mean(R) # mean reward
     R = tf.reshape(R, (batch_size, 1))
+    # TODO: (GW) likely this line will change since total future reward will
+    # now vary due to the KL intrinsic reward.
     R = tf.tile(R, [1, (nGlimpses)*2])
 
     # get the location
