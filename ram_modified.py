@@ -244,6 +244,7 @@ def model():
     # set up the recurrent structure
     inputs = [0] * nGlimpses
     outputs = [0] * nGlimpses
+    glimpse_reps = [0] * nGlimpses
     glimpse = initial_glimpse
     REUSE = None
     for t in range(nGlimpses):
@@ -258,11 +259,13 @@ def model():
             # TODO: (gw) why didn't they just define the affine Transform
             # weights below and not use the REUSE flag?
             #hiddenState = tf.nn.relu(affineTransform(hiddenState_prev, cell_size) + (tf.matmul(glimpse, Wc_g_h) + Bc_g_h))
-            hiddenState = tf.nn.relu(tf.matmul(hiddenState_prev, Wc_h_h) + Bc_h_h + (tf.matmul(glimpse, Wc_g_h) + Bc_g_h))
+            glimpse_rep = tf.matmul(glimpse, Wc_g_h) + Bc_g_h
+            hiddenState = tf.nn.relu(tf.matmul(hiddenState_prev, Wc_h_h) + Bc_h_h + glimpse_rep)
 
         # save the current glimpse and the hidden state
         inputs[t] = glimpse
         outputs[t] = hiddenState
+        glimpse_reps[t] = glimpse_rep
         # get the next input glimpse
         if t != nGlimpses -1:
             glimpse = get_next_input(hiddenState)
@@ -273,7 +276,7 @@ def model():
             baselines.append(baseline)
         REUSE = True  # share variables for later recurrence
 
-    return outputs
+    return outputs, glimpse_reps
 
 
 def dense_to_one_hot(labels_dense, num_classes=10):
@@ -293,13 +296,13 @@ def gaussian_pdf(mean, sample):
     return Z * tf.exp(a)
 
 
-def calc_reward(outputs):
+def calc_reward(mems, glimpse_reps):
     # outputs are the sequence of hidden states.
 
     # consider the action at the last time step
-    outputs = outputs[-1] # look at ONLY THE END of the sequence
+    last_mem = mems[-1] # look at ONLY THE END of the sequence
     # TODO: (Grant) is this line necessary? Seems like its already this size
-    outputs = tf.reshape(outputs, (batch_size, cell_out_size))
+    last_mem = tf.reshape(last_mem, (batch_size, cell_out_size))
 
     # get the baseline
     b = tf.stack(baselines)
@@ -308,7 +311,7 @@ def calc_reward(outputs):
     no_grad_b = tf.stop_gradient(b)
 
     # get the action(classification)
-    p_y = tf.nn.softmax(tf.matmul(outputs, Wa_h_a) + Ba_h_a)
+    p_y = tf.nn.softmax(tf.matmul(last_mem, Wa_h_a) + Ba_h_a)
     max_p_y = tf.arg_max(p_y, 1)
     correct_y = tf.cast(labels_placeholder, tf.int64)
 
@@ -485,7 +488,7 @@ with tf.device('/gpu:1'):
         Ba_h_a = weight_variable((1,n_classes),  "actionNet_bias_hidden_action", True)
 
         # query the model ouput
-        outputs = model()
+        outputs, glimpse_reps = model()
 
         # convert list of tensors to one big tensor
         sampled_locs = tf.concat(axis=0, values=sampled_locs)
@@ -498,7 +501,7 @@ with tf.device('/gpu:1'):
 
         # compute the reward
         reconstructionCost, reconstruction, train_op_r = preTrain(outputs)
-        cost, reward, predicted_labels, correct_labels, train_op, b, avg_b, rminusb, lr = calc_reward(outputs)
+        cost, reward, predicted_labels, correct_labels, train_op, b, avg_b, rminusb, lr = calc_reward(outputs, glimpse_reps)
 
         # tensorboard visualization for the parameters
         variable_summaries(Wg_l_h, "glimpseNet_wts_location_hidden")
