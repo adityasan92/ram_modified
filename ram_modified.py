@@ -255,7 +255,8 @@ def model():
             # the next hidden state is a function of the previous hidden state and the current glimpse
             # TODO: (gw) why didn't they just define the affine Transform
             # weights below and not use the REUSE flag?
-            hiddenState = tf.nn.relu(affineTransform(hiddenState_prev, cell_size) + (tf.matmul(glimpse, Wc_g_h) + Bc_g_h))
+            #hiddenState = tf.nn.relu(affineTransform(hiddenState_prev, cell_size) + (tf.matmul(glimpse, Wc_g_h) + Bc_g_h))
+            hiddenState = tf.nn.relu(tf.matmul(hiddenState_prev, Wc_h_h) + Bc_h_h + (tf.matmul(glimpse, Wc_g_h) + Bc_g_h))
 
         # save the current glimpse and the hidden state
         inputs[t] = glimpse
@@ -463,6 +464,11 @@ with tf.device('/gpu:1'):
 
         Wc_g_h = weight_variable((cell_size, g_size), "coreNet_wts_glimpse_hidden", True)
         Bc_g_h = weight_variable((1,g_size), "coreNet_bias_glimpse_hidden", True)
+
+        Wc_h_h = weight_variable((cell_size,cell_size),
+                                 'coreNet_wts_hidden_hidden', True)
+        Bc_h_h = weight_variable((1,cell_size),
+                                 'coreNet_bias_hidden_hidden', True)
 
         Wr_h_r = weight_variable((cell_out_size, img_size**2), "reconstructionNet_wts_hidden_action", True)
         Br_h_r = weight_variable((1, img_size**2), "reconstructionNet_bias_hidden_action", True)
