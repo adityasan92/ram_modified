@@ -40,8 +40,8 @@ load_path = save_dir + save_prefix + str(start_step) + ".ckpt"
 # to enable visualization, set draw to True
 load_model = False
 eval_only = False
-draw = True
-animate = True
+draw = False
+animate = False
 
 # conditions
 translateMnist = 1
@@ -205,14 +205,13 @@ def get_next_input(output):
     # add noise
     # sample_loc = tf.tanh(mean_loc + tf.random_normal(mean_loc.get_shape(), 0, loc_sd))
     sample_loc = tf.maximum(-1.0, tf.minimum(1.0, mean_loc + tf.random_normal(mean_loc.get_shape(), 0, loc_sd)))
-    print(sample_loc.get_shape().as_list())
+
     # don't propagate throught the locations
     # TODO: (GW) do they put a stop grad here to stop REINFORCE signal from
     # affecting anything beyond the theta_l box? Seems like why they do it.
     sample_loc = tf.stop_gradient(sample_loc)
     sampled_locs.append(sample_loc)
 
-    print(sample_loc.get_shape().as_list())
     return get_glimpse(sample_loc)
 
 

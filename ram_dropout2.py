@@ -40,11 +40,11 @@ load_path = save_dir + save_prefix + str(start_step) + ".ckpt"
 # to enable visualization, set draw to True
 load_model = False
 eval_only = False
-draw = True
-animate = True
+draw = False
+animate = False
 
 # conditions
-translateMnist = 1
+translateMnist = 0
 eyeCentered = 0
 
 preTraining = 0
@@ -57,6 +57,7 @@ translated_img_size = 60             # side length of the picture
 
 fixed_learning_rate = 0.001
 
+noOfForwardPasses = 5
 
 if translateMnist:
     print("TRANSLATED MNIST")
@@ -205,15 +206,48 @@ def get_next_input(output):
     # add noise
     # sample_loc = tf.tanh(mean_loc + tf.random_normal(mean_loc.get_shape(), 0, loc_sd))
     sample_loc = tf.maximum(-1.0, tf.minimum(1.0, mean_loc + tf.random_normal(mean_loc.get_shape(), 0, loc_sd)))
-    print(sample_loc.get_shape().as_list())
+
     # don't propagate throught the locations
     # TODO: (GW) do they put a stop grad here to stop REINFORCE signal from
     # affecting anything beyond the theta_l box? Seems like why they do it.
     sample_loc = tf.stop_gradient(sample_loc)
     sampled_locs.append(sample_loc)
 
-    print(sample_loc.get_shape().as_list())
-    return get_glimpse(sample_loc)
+    return sample_loc
+
+def get_next_input_2(output):
+    # the next location is computed by the location network
+    # TODO: (GW) interesting to see here that they don't backprop to diff
+    # timesteps.
+    core_net_out = tf.stop_gradient(output)
+
+    # baseline = tf.sigmoid(tf.matmul(core_net_out, Wb_h_b) + Bb_h_b)
+    # baseline = tf.sigmoid(tf.matmul(core_net_out, Wb_h_b) + Bb_h_b)
+    # baselines.append(baseline)
+
+    # compute the next location, then impose noise
+    if eyeCentered:
+        # add the last sampled glimpse location
+        # TODO max(-1, min(1, u + N(output, sigma) + prevLoc))
+        mean_loc = tf.maximum(-1.0, tf.minimum(1.0, tf.matmul(core_net_out, Wl_h_l) + sampled_locs[-1] ))
+    else:
+        # mean_loc = tf.clip_by_value(tf.matmul(core_net_out, Wl_h_l) + Bl_h_l, -1, 1)
+        mean_loc = tf.matmul(core_net_out, Wl_h_l) + Bl_h_l
+        mean_loc = tf.clip_by_value(mean_loc, -1, 1)
+    # mean_loc = tf.stop_gradient(mean_loc)
+    # mean_locs.append(mean_loc)
+
+    # add noise
+    # sample_loc = tf.tanh(mean_loc + tf.random_normal(mean_loc.get_shape(), 0, loc_sd))
+    sample_loc = tf.maximum(-1.0, tf.minimum(1.0, mean_loc + tf.random_normal(mean_loc.get_shape(), 0, loc_sd)))
+
+    # don't propagate throught the locations
+    # TODO: (GW) do they put a stop grad here to stop REINFORCE signal from
+    # affecting anything beyond the theta_l box? Seems like why they do it.
+    sample_loc = tf.stop_gradient(sample_loc)
+    # sampled_locs.append(sample_loc)
+
+    return sample_loc
 
 
 def affineTransform(x,output_dim):
@@ -238,39 +272,64 @@ def model():
     sampled_locs.append(initial_loc)
 
     # get the input using the input network
-    initial_glimpse = get_glimpse(initial_loc)
+    initial_glimpse = get_glimpse(initial_loc) #tf.stack 5 times 
 
     # set up the recurrent structure
     inputs = [0] * nGlimpses
     outputs = [0] * nGlimpses
     glimpse = initial_glimpse
     REUSE = None
+
+
+    dropout_input_mask =  tf.cast(
+        tf.contrib.distributions.Bernoulli(tf.constant(np.ones((1,g_size,noOfForwardPasses))/2)).sample(), tf.float32)
+    next_location_passes = []
+    # TODO: Create use dropout with seed 
     for t in range(nGlimpses):
         if t == 0:  # initialize the hidden state to be the zero vector
             hiddenState_prev = tf.zeros((batch_size, cell_size))
         else:
             hiddenState_prev = outputs[t-1]
 
-        # forward prop
-        with tf.variable_scope("coreNetwork", reuse=REUSE):
-            # the next hidden state is a function of the previous hidden state and the current glimpse
-            # TODO: (gw) why didn't they just define the affine Transform
-            # weights below and not use the REUSE flag?
-            #hiddenState = tf.nn.relu(affineTransform(hiddenState_prev, cell_size) + (tf.matmul(glimpse, Wc_g_h) + Bc_g_h))
-            hiddenState = tf.nn.relu(tf.matmul(hiddenState_prev, Wc_h_h) + Bc_h_h + (tf.matmul(glimpse, Wc_g_h) + Bc_g_h))
+        for forwardpass in range(noOfForwardPasses):
+            # forward prop
+            noise = tf.squeeze(tf.slice(dropout_input_mask,[0,0,forwardpass],[1,g_size, 1]),[2])
+            with tf.variable_scope("coreNetwork", reuse=REUSE):
+                # the next hidden state is a function of the previous hidden state and the current glimpse
+                # TODO: (gw) why didn't they just define the affine Transform
+                # weights below and not use the REUSE flag?
+                #hiddenState = tf.nn.relu(affineTransform(hiddenState_prev, cell_size) + (tf.matmul(glimpse, Wc_g_h) + Bc_g_h))
+                pre_hidden = tf.matmul(hiddenState_prev, Wc_h_h) + Bc_h_h
+                glimpse_input = (tf.matmul(glimpse, Wc_g_h) + Bc_g_h)
+                dropout_glimpse_input = tf.multiply(noise,glimpse_input)
+                # print(glimpse_input.get_shape().as_list())
+                # print(dropout_glimpse_input.get_shape().as_list())
+                # TODO: Same dropout map for hidden state changes 
+                # TODO: Same dropout map for glimpse_input changes 
+                hiddenState = tf.nn.relu(pre_hidden + dropout_glimpse_input)
 
+            if t != nGlimpses -1:
+                loc = get_next_input_2(hiddenState)
+                next_location_passes.append(loc)
+                # print(next_location_passes)
+
+            REUSE = True  # share variables for later recurrence
+        
         # save the current glimpse and the hidden state
         inputs[t] = glimpse
         outputs[t] = hiddenState
         # get the next input glimpse
         if t != nGlimpses -1:
-            glimpse = get_next_input(hiddenState)
+            loc = get_next_input(hiddenState)
+            # next_location_passes.append(loc)
+            #print(loc.get_shape().as_list())
+            glimpse = get_glimpse(loc)
         else:
             first_hiddenState = tf.stop_gradient(hiddenState)
             # baseline = tf.sigmoid(tf.matmul(first_hiddenState, Wb_h_b) + Bb_h_b)
             baseline = tf.sigmoid(tf.matmul(first_hiddenState, Wb_h_b) + Bb_h_b)
             baselines.append(baseline)
-        REUSE = True  # share variables for later recurrence
+    
 
     return outputs
 
