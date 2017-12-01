@@ -1,4 +1,4 @@
-vimport tensorflow as tf
+import tensorflow as tf
 import tf_mnist_loader
 import matplotlib.pyplot as plt
 import numpy as np
@@ -17,6 +17,9 @@ dataset = tf_mnist_loader.read_data_sets("mnist_data")
 save_dir = "chckPts/"
 save_prefix = "save"
 summaryFolderName = "summary/"
+
+# Disable GPU
+os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
 
 if len(sys.argv) == 2:
@@ -40,8 +43,8 @@ load_path = save_dir + save_prefix + str(start_step) + ".ckpt"
 # to enable visualization, set draw to True
 load_model = False
 eval_only = False
-draw = True
-animate = True
+draw = False
+animate = False
 
 # conditions
 translateMnist = 0
@@ -527,7 +530,7 @@ def plotWholeImg(img, img_size, sampled_locs_fetched):
              color='red')
 
 
-with tf.device('/gpu:1'):
+with tf.device('/cpu'):
 
     with tf.Graph().as_default():
 
@@ -623,8 +626,8 @@ with tf.device('/gpu:1'):
 
         ####################################### START RUNNING THE MODEL #######################################
 
-        sess_config = tf.ConfigProto(allow_soft_placement=True, log_device_placement=False)
-        sess_config.gpu_options.allow_growth = True
+        sess_config = tf.ConfigProto(allow_soft_placement=True, log_device_placement=False, device_count = { 'GPU' : 0 })
+        sess_config.gpu_options.allow_growth = False
         sess = tf.Session(config=sess_config)
 
         saver = tf.train.Saver()
