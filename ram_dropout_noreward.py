@@ -413,7 +413,7 @@ def calc_reward(outputs, dropout_reward):
 
     R = tf.expand_dims(R, 2)
     R = tf.tile(R, [1, 1, 2])
-    reward = tf.reduce_mean(R)
+    #reward = tf.reduce_mean(R)
     # get the location
 
     p_loc = gaussian_pdf(mean_locs, sampled_locs)
