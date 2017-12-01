@@ -283,38 +283,53 @@ def model():
 
     dropout_input_mask =  tf.cast(
         tf.contrib.distributions.Bernoulli(tf.constant(np.ones((1,g_size,noOfForwardPasses))/2)).sample(), tf.float32)
-    next_location_passes = []
+    dropout_hidden_mask =  tf.cast(
+        tf.contrib.distributions.Bernoulli(tf.constant(np.ones((1,cell_size,noOfForwardPasses))/2)).sample(), tf.float32)
+    variances_locations = []
     # TODO: Create use dropout with seed 
     for t in range(nGlimpses):
         if t == 0:  # initialize the hidden state to be the zero vector
             hiddenState_prev = tf.zeros((batch_size, cell_size))
         else:
             hiddenState_prev = outputs[t-1]
-
+        
+        forward_loc = []
         for forwardpass in range(noOfForwardPasses):
             # forward prop
-            noise = tf.squeeze(tf.slice(dropout_input_mask,[0,0,forwardpass],[1,g_size, 1]),[2])
+            
+            noise_input = tf.squeeze(tf.slice(dropout_input_mask,[0,0,forwardpass],[1,g_size, 1]),[2])
+            noise_hidden = tf.squeeze(tf.slice(dropout_hidden_mask,[0,0,forwardpass],[1,g_size, 1]),[2])
             with tf.variable_scope("coreNetwork", reuse=REUSE):
                 # the next hidden state is a function of the previous hidden state and the current glimpse
                 # TODO: (gw) why didn't they just define the affine Transform
                 # weights below and not use the REUSE flag?
                 #hiddenState = tf.nn.relu(affineTransform(hiddenState_prev, cell_size) + (tf.matmul(glimpse, Wc_g_h) + Bc_g_h))
                 pre_hidden = tf.matmul(hiddenState_prev, Wc_h_h) + Bc_h_h
+                dropout_pre_hidden = tf.multiply(noise_hidden,pre_hidden)
                 glimpse_input = (tf.matmul(glimpse, Wc_g_h) + Bc_g_h)
-                dropout_glimpse_input = tf.multiply(noise,glimpse_input)
+                dropout_glimpse_input = tf.multiply(noise_input,glimpse_input)
                 # print(glimpse_input.get_shape().as_list())
                 # print(dropout_glimpse_input.get_shape().as_list())
                 # TODO: Same dropout map for hidden state changes 
                 # TODO: Same dropout map for glimpse_input changes 
-                hiddenState = tf.nn.relu(pre_hidden + dropout_glimpse_input)
+                hiddenState = tf.nn.relu(dropout_pre_hidden + dropout_glimpse_input)
 
-            if t != nGlimpses -1:
-                loc = get_next_input_2(hiddenState)
-                next_location_passes.append(loc)
-                # print(next_location_passes)
+    
+            loc = get_next_input_2(hiddenState)
+            #next_location_passes.append(loc)
+            forward_loc.append(loc)
+            # print(next_location_passes)
 
             REUSE = True  # share variables for later recurrence
         
+        
+        tensor_locs = tf.stack(forward_loc)
+        print(tensor_locs.get_shape().as_list(),"tensor_loc")
+        mean, variances = tf.nn.moments(tensor_locs,[0])
+        print(variances.get_shape().as_list(),"variances")
+        total_variance =  tf.reduce_mean(variances, axis=1)
+        print(total_variance.get_shape().as_list(),"total variance")
+        variances_locations.append(total_variance)
         # save the current glimpse and the hidden state
         inputs[t] = glimpse
         outputs[t] = hiddenState
@@ -330,8 +345,8 @@ def model():
             baseline = tf.sigmoid(tf.matmul(first_hiddenState, Wb_h_b) + Bb_h_b)
             baselines.append(baseline)
     
-
-    return outputs
+    print(str(variances_locations),"variances_locations")
+    return outputs,variances_locations
 
 
 def dense_to_one_hot(labels_dense, num_classes=10):
@@ -351,9 +366,9 @@ def gaussian_pdf(mean, sample):
     return Z * tf.exp(a)
 
 
-def calc_reward(outputs):
+def calc_reward(outputs, dropout_reward):
     # outputs are the sequence of hidden states.
-
+    print(dropout_reward.get_shape().as_list())
     # consider the action at the last time step
     outputs = outputs[-1] # look at ONLY THE END of the sequence
     # TODO: (Grant) is this line necessary? Seems like its already this size
@@ -556,7 +571,7 @@ with tf.device('/gpu:1'):
         Ba_h_a = weight_variable((1,n_classes),  "actionNet_bias_hidden_action", True)
 
         # query the model ouput
-        outputs = model()
+        outputs, dropout_reward = model()
 
         # convert list of tensors to one big tensor
         sampled_locs = tf.concat(axis=0, values=sampled_locs)
@@ -569,7 +584,7 @@ with tf.device('/gpu:1'):
 
         # compute the reward
         reconstructionCost, reconstruction, train_op_r = preTrain(outputs)
-        cost, reward, predicted_labels, correct_labels, train_op, b, avg_b, rminusb, lr = calc_reward(outputs)
+        cost, reward, predicted_labels, correct_labels, train_op, b, avg_b, rminusb, lr = calc_reward(outputs, dropout_reward)
 
         # tensorboard visualization for the parameters
         variable_summaries(Wg_l_h, "glimpseNet_wts_location_hidden")
@@ -685,12 +700,12 @@ with tf.device('/gpu:1'):
                              onehot_labels_placeholder: dense_to_one_hot(nextY)}
 
                 fetches = [train_op, cost, reward, predicted_labels, correct_labels, glimpse_images, avg_b, rminusb, \
-                           mean_locs, sampled_locs, lr]
+                           mean_locs, sampled_locs, lr, dropout_reward]
                 # feed them to the model
                 results = sess.run(fetches, feed_dict=feed_dict)
 
                 _, cost_fetched, reward_fetched, prediction_labels_fetched, correct_labels_fetched, glimpse_images_fetched, \
-                avg_b_fetched, rminusb_fetched, mean_locs_fetched, sampled_locs_fetched, lr_fetched = results
+                avg_b_fetched, rminusb_fetched, mean_locs_fetched, sampled_locs_fetched, lr_fetched, dropout_reward_fetched = results
 
 
                 duration = time.time() - start_time
@@ -698,6 +713,7 @@ with tf.device('/gpu:1'):
                 if epoch % 20 == 0:
                     print(('Step %d: cost = %.5f reward = %.5f (%.3f sec) b = %.5f R-b = %.5f, LR = %.5f'
                           % (epoch, cost_fetched, reward_fetched, duration, avg_b_fetched, rminusb_fetched, lr_fetched)))
+                    print(str(np.mean(dropout_reward_fetched)), "Dr reward")
                     summary_str = sess.run(summary_op, feed_dict=feed_dict)
                     summary_writer.add_summary(summary_str, epoch)
                     # if saveImgs:
