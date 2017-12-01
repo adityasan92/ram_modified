@@ -40,8 +40,8 @@ load_path = save_dir + save_prefix + str(start_step) + ".ckpt"
 # to enable visualization, set draw to True
 load_model = False
 eval_only = False
-draw = False
-animate = False
+draw = True
+animate = True
 
 # conditions
 translateMnist = 0
@@ -262,6 +262,8 @@ def affineTransform(x,output_dim):
 
 def model():
 
+    dropout_prob = 0.5
+
     # initialize the location under unif[-1,1], for all example in the batch
     initial_loc = tf.random_uniform((batch_size, 2), minval=-1, maxval=1)
     mean_locs.append(initial_loc)
@@ -282,10 +284,11 @@ def model():
 
 
     dropout_input_mask =  tf.cast(
-        tf.contrib.distributions.Bernoulli(tf.constant(np.ones((1,g_size,noOfForwardPasses))/2)).sample(), tf.float32)
+        tf.contrib.distributions.Bernoulli(tf.constant(np.ones((1,g_size,noOfForwardPasses)) * dropout_prob )).sample(), tf.float32)
     dropout_hidden_mask =  tf.cast(
-        tf.contrib.distributions.Bernoulli(tf.constant(np.ones((1,cell_size,noOfForwardPasses))/2)).sample(), tf.float32)
+        tf.contrib.distributions.Bernoulli(tf.constant(np.ones((1,cell_size,noOfForwardPasses)) * dropout_prob)).sample(), tf.float32)
     variances_locations = []
+    tau = tf.cast(tf.constant((1.0 - dropout_prob)*np.ones(batch_size)),tf.float32)
     # TODO: Create use dropout with seed 
     for t in range(nGlimpses):
         if t == 0:  # initialize the hidden state to be the zero vector
@@ -327,7 +330,7 @@ def model():
         print(tensor_locs.get_shape().as_list(),"tensor_loc")
         mean, variances = tf.nn.moments(tensor_locs,[0])
         print(variances.get_shape().as_list(),"variances")
-        total_variance =  tf.reduce_mean(variances, axis=1)
+        total_variance =  tf.reduce_mean(variances, axis=1) + tau
         print(total_variance.get_shape().as_list(),"total variance")
         variances_locations.append(total_variance)
         # save the current glimpse and the hidden state
@@ -368,11 +371,13 @@ def gaussian_pdf(mean, sample):
 
 def calc_reward(outputs, dropout_reward):
     # outputs are the sequence of hidden states.
-    print(dropout_reward.get_shape().as_list())
+    #print(dropout_reward.get_shape().as_list())
     # consider the action at the last time step
     outputs = outputs[-1] # look at ONLY THE END of the sequence
     # TODO: (Grant) is this line necessary? Seems like its already this size
     outputs = tf.reshape(outputs, (batch_size, cell_out_size))
+
+    dropout_reward = tf.convert_to_tensor(dropout_reward)
 
     # get the baseline
     b = tf.stack(baselines)
@@ -396,7 +401,8 @@ def calc_reward(outputs, dropout_reward):
     # rather the timesteps KL-based intrinsic reward.
     # TODO: ensure that indexing over R_intrinsic is not shifted by 1.
     R = tf.tile(R, [1, (nGlimpses)])
-    r_intrinsic = tf.zeros(R.get_shape().as_list()) # TODO: change this line.
+    print(R.get_shape().as_list(), "reward shape")
+    r_intrinsic = tf.transpose(dropout_reward) # TODO: change this line.
     R_intrinsic = [tf.zeros([batch_size]) for _ in xrange(nGlimpses)]
     R_intrinsic[-1] = r_intrinsic[:,-1]
     for g_id in xrange(nGlimpses-2, -1, -1):
@@ -407,7 +413,7 @@ def calc_reward(outputs, dropout_reward):
 
     R = tf.expand_dims(R, 2)
     R = tf.tile(R, [1, 1, 2])
-
+    reward = tf.reduce_mean(R)
     # get the location
 
     p_loc = gaussian_pdf(mean_locs, sampled_locs)
