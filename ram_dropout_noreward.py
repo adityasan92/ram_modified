@@ -728,7 +728,7 @@ with tf.device('/cpu'):
                     # if saveImgs:
                     #     plt.savefig(imgsFolderName + simulationName + '_ep%.6d.png' % (epoch))
 
-                    if epoch % 5000 == 0:
+                    if epoch % 1000 == 0:
                         saver.save(sess, save_dir + save_prefix + str(epoch) + ".ckpt")
                         evaluate()
 

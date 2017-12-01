@@ -413,7 +413,7 @@ def calc_reward(outputs, dropout_reward):
 
     R = tf.expand_dims(R, 2)
     R = tf.tile(R, [1, 1, 2])
-    reward = tf.reduce_mean(R)
+    total_reward = tf.reduce_mean(R)
     # get the location
 
     p_loc = gaussian_pdf(mean_locs, sampled_locs)
@@ -436,7 +436,7 @@ def calc_reward(outputs, dropout_reward):
     # train_op = optimizer.minimize(cost, global_step)
     train_op = optimizer.apply_gradients(zip(grads, var_list), global_step=global_step)
 
-    return cost, reward, max_p_y, correct_y, train_op, b, tf.reduce_mean(b), tf.reduce_mean(R - b), lr
+    return cost, reward, max_p_y, correct_y, train_op, b, tf.reduce_mean(b), tf.reduce_mean(R - b), lr, total_reward
 
 
 def preTrain(outputs):
@@ -590,7 +590,7 @@ with tf.device('/gpu:1'):
 
         # compute the reward
         reconstructionCost, reconstruction, train_op_r = preTrain(outputs)
-        cost, reward, predicted_labels, correct_labels, train_op, b, avg_b, rminusb, lr = calc_reward(outputs, dropout_reward)
+        cost, reward, predicted_labels, correct_labels, train_op, b, avg_b, rminusb, lr, total_reward = calc_reward(outputs, dropout_reward)
 
         # tensorboard visualization for the parameters
         variable_summaries(Wg_l_h, "glimpseNet_wts_location_hidden")
@@ -706,12 +706,12 @@ with tf.device('/gpu:1'):
                              onehot_labels_placeholder: dense_to_one_hot(nextY)}
 
                 fetches = [train_op, cost, reward, predicted_labels, correct_labels, glimpse_images, avg_b, rminusb, \
-                           mean_locs, sampled_locs, lr, dropout_reward]
+                           mean_locs, sampled_locs, lr, dropout_reward, total_reward]
                 # feed them to the model
                 results = sess.run(fetches, feed_dict=feed_dict)
 
                 _, cost_fetched, reward_fetched, prediction_labels_fetched, correct_labels_fetched, glimpse_images_fetched, \
-                avg_b_fetched, rminusb_fetched, mean_locs_fetched, sampled_locs_fetched, lr_fetched, dropout_reward_fetched = results
+                avg_b_fetched, rminusb_fetched, mean_locs_fetched, sampled_locs_fetched, lr_fetched, dropout_reward_fetched, total_reward_fetched = results
 
 
                 duration = time.time() - start_time
@@ -719,13 +719,13 @@ with tf.device('/gpu:1'):
                 if epoch % 20 == 0:
                     print(('Step %d: cost = %.5f reward = %.5f (%.3f sec) b = %.5f R-b = %.5f, LR = %.5f'
                           % (epoch, cost_fetched, reward_fetched, duration, avg_b_fetched, rminusb_fetched, lr_fetched)))
-                    print(str(np.mean(dropout_reward_fetched)), "Dr reward")
+                    print("Dropout reward",str(np.mean(dropout_reward_fetched)), "Total Reward",total_reward_fetched)
                     summary_str = sess.run(summary_op, feed_dict=feed_dict)
                     summary_writer.add_summary(summary_str, epoch)
                     # if saveImgs:
                     #     plt.savefig(imgsFolderName + simulationName + '_ep%.6d.png' % (epoch))
 
-                    if epoch % 5000 == 0:
+                    if epoch % 1000 == 0:
                         saver.save(sess, save_dir + save_prefix + str(epoch) + ".ckpt")
                         evaluate()
 
