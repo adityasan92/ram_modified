@@ -18,6 +18,8 @@ save_dir = "chckPts/"
 save_prefix = "save"
 summaryFolderName = "summary/"
 
+# Disable GPU
+os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
 if len(sys.argv) == 2:
     simulationName = str(sys.argv[1])
@@ -40,11 +42,11 @@ load_path = save_dir + save_prefix + str(start_step) + ".ckpt"
 # to enable visualization, set draw to True
 load_model = False
 eval_only = False
-draw = True
-animate = True
+draw = False
+animate = False
 
 # conditions
-translateMnist = 1
+translateMnist = 0
 eyeCentered = 0
 
 preTraining = 0
@@ -644,7 +646,7 @@ with tf.device('/gpu:1'):
                     # if saveImgs:
                     #     plt.savefig(imgsFolderName + simulationName + '_ep%.6d.png' % (epoch))
 
-                    if epoch % 5000 == 0:
+                    if epoch % 1000 == 0:
                         saver.save(sess, save_dir + save_prefix + str(epoch) + ".ckpt")
                         evaluate()
 

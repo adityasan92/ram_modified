@@ -719,7 +719,7 @@ with tf.device('/cpu'):
 
                 duration = time.time() - start_time
 
-                if epoch % 20 == 0:
+                if epoch % 100 == 0:
                     print(('Step %d: cost = %.5f reward = %.5f (%.3f sec) b = %.5f R-b = %.5f, LR = %.5f'
                           % (epoch, cost_fetched, reward_fetched, duration, avg_b_fetched, rminusb_fetched, lr_fetched)))
                     print(str(np.mean(dropout_reward_fetched)), "Dr reward")

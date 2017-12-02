@@ -18,6 +18,8 @@ save_dir = "chckPts/"
 save_prefix = "save"
 summaryFolderName = "summary/"
 
+# Disable GPU
+os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
 if len(sys.argv) == 2:
     simulationName = str(sys.argv[1])
@@ -40,8 +42,8 @@ load_path = save_dir + save_prefix + str(start_step) + ".ckpt"
 # to enable visualization, set draw to True
 load_model = False
 eval_only = False
-draw = True
-animate = True
+draw = False
+animate = False
 
 # conditions
 translateMnist = 0
@@ -181,7 +183,7 @@ def get_glimpse(loc):
     return glimpseFeature1
 
 
-def get_next_input(output):
+def get_next_input(output,flag_save=False):
     # the next location is computed by the location network
     # TODO: (GW) interesting to see here that they don't backprop to diff
     # timesteps.
@@ -262,7 +264,7 @@ def affineTransform(x,output_dim):
 
 def model():
 
-    dropout_prob = 0.5
+    dropout_prob = 0.7
 
     # initialize the location under unif[-1,1], for all example in the batch
     initial_loc = tf.random_uniform((batch_size, 2), minval=-1, maxval=1)
@@ -282,7 +284,6 @@ def model():
     glimpse = initial_glimpse
     REUSE = None
 
-
     dropout_input_mask =  tf.cast(
         tf.contrib.distributions.Bernoulli(tf.constant(np.ones((1,g_size,noOfForwardPasses)) * dropout_prob )).sample(), tf.float32)
     dropout_hidden_mask =  tf.cast(
@@ -299,7 +300,6 @@ def model():
         forward_loc = []
         for forwardpass in range(noOfForwardPasses):
             # forward prop
-            
             noise_input = tf.squeeze(tf.slice(dropout_input_mask,[0,0,forwardpass],[1,g_size, 1]),[2])
             noise_hidden = tf.squeeze(tf.slice(dropout_hidden_mask,[0,0,forwardpass],[1,g_size, 1]),[2])
             with tf.variable_scope("coreNetwork", reuse=REUSE):
@@ -315,17 +315,14 @@ def model():
                 # print(dropout_glimpse_input.get_shape().as_list())
                 # TODO: Same dropout map for hidden state changes 
                 # TODO: Same dropout map for glimpse_input changes 
-                hiddenState = tf.nn.relu(dropout_pre_hidden + dropout_glimpse_input)
-
-    
+                hiddenState = tf.nn.relu(dropout_pre_hidden + dropout_glimpse_input)    
             loc = get_next_input_2(hiddenState)
             #next_location_passes.append(loc)
             forward_loc.append(loc)
             # print(next_location_passes)
-
             REUSE = True  # share variables for later recurrence
         
-        
+        # Save variances
         tensor_locs = tf.stack(forward_loc)
         print(tensor_locs.get_shape().as_list(),"tensor_loc")
         mean, variances = tf.nn.moments(tensor_locs,[0])
@@ -333,6 +330,7 @@ def model():
         total_variance =  tf.reduce_mean(variances, axis=1) + tau
         print(total_variance.get_shape().as_list(),"total variance")
         variances_locations.append(total_variance)
+   
         # save the current glimpse and the hidden state
         inputs[t] = glimpse
         outputs[t] = hiddenState
@@ -461,8 +459,9 @@ def evaluate():
         nextX, nextY = dataset.test.next_batch(batch_size)
         if translateMnist:
             nextX, _ = convertTranslated(nextX, MNIST_SIZE, img_size)
-        feed_dict = {inputs_placeholder: nextX, labels_placeholder: nextY,
-                     onehot_labels_placeholder: dense_to_one_hot(nextY)}
+        feed_dict = { inputs_placeholder: nextX, labels_placeholder: nextY,
+                      onehot_labels_placeholder: dense_to_one_hot(nextY)
+		       }
         r = sess.run(reward, feed_dict=feed_dict)
         accuracy += r
 
@@ -716,7 +715,7 @@ with tf.device('/gpu:1'):
 
                 duration = time.time() - start_time
 
-                if epoch % 20 == 0:
+                if epoch % 100 == 0:
                     print(('Step %d: cost = %.5f reward = %.5f (%.3f sec) b = %.5f R-b = %.5f, LR = %.5f'
                           % (epoch, cost_fetched, reward_fetched, duration, avg_b_fetched, rminusb_fetched, lr_fetched)))
                     print("Dropout reward",str(np.mean(dropout_reward_fetched)), "Total Reward",total_reward_fetched)
