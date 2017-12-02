@@ -166,6 +166,23 @@ def glimpseSensor(img, normLoc):
 
     return zooms
 
+def concrete_dropout(x):
+        eps = 1e-7
+        temp = 0.1
+        unif_noise = tf.random_uniform(shape=tf.shape(x))
+        drop_prob = (
+            tf.log(dropout_probability + eps)
+            - tf.log(1. - dropout_probability + eps)
+            + tf.log(unif_noise + eps)
+            - tf.log(1. - unif_noise + eps)
+        )
+        drop_prob = tf.nn.sigmoid(drop_prob / temp)
+        random_tensor = 1. - drop_prob
+        retain_prob = 1. - dropout_probability
+        x *= random_tensor
+        x /= retain_prob
+        return x
+
 # implements the input network
 def get_glimpse(loc):
     # get input using the previous location
@@ -217,41 +234,6 @@ def get_next_input(output,flag_save):
 
     return sample_loc
 
-def get_next_input_2(output):
-    # the next location is computed by the location network
-    # TODO: (GW) interesting to see here that they don't backprop to diff
-    # timesteps.
-    core_net_out = tf.stop_gradient(output)
-
-    # baseline = tf.sigmoid(tf.matmul(core_net_out, Wb_h_b) + Bb_h_b)
-    # baseline = tf.sigmoid(tf.matmul(core_net_out, Wb_h_b) + Bb_h_b)
-    # baselines.append(baseline)
-
-    # compute the next location, then impose noise
-    if eyeCentered:
-        # add the last sampled glimpse location
-        # TODO max(-1, min(1, u + N(output, sigma) + prevLoc))
-        mean_loc = tf.maximum(-1.0, tf.minimum(1.0, tf.matmul(core_net_out, Wl_h_l) + sampled_locs[-1] ))
-    else:
-        # mean_loc = tf.clip_by_value(tf.matmul(core_net_out, Wl_h_l) + Bl_h_l, -1, 1)
-        mean_loc = tf.matmul(core_net_out, Wl_h_l) + Bl_h_l
-        mean_loc = tf.clip_by_value(mean_loc, -1, 1)
-    # mean_loc = tf.stop_gradient(mean_loc)
-    # mean_locs.append(mean_loc)
-
-    # add noise
-    # sample_loc = tf.tanh(mean_loc + tf.random_normal(mean_loc.get_shape(), 0, loc_sd))
-    sample_loc = tf.maximum(-1.0, tf.minimum(1.0, mean_loc + tf.random_normal(mean_loc.get_shape(), 0, loc_sd)))
-
-    # don't propagate throught the locations
-    # TODO: (GW) do they put a stop grad here to stop REINFORCE signal from
-    # affecting anything beyond the theta_l box? Seems like why they do it.
-    sample_loc = tf.stop_gradient(sample_loc)
-    # sampled_locs.append(sample_loc)
-
-    return sample_loc
-
-
 def affineTransform(x,output_dim):
     """
     affine transformation Wx+b
@@ -284,12 +266,13 @@ def model():
     glimpse = initial_glimpse
     REUSE = None
 
-    dropout_input_mask =  tf.cast(
-        tf.contrib.distributions.Bernoulli(tf.constant(np.ones((1,g_size,noOfForwardPasses)) * dropout_prob )).sample(), tf.float32)
-    dropout_hidden_mask =  tf.cast(
-        tf.contrib.distributions.Bernoulli(tf.constant(np.ones((1,cell_size,noOfForwardPasses)) * dropout_prob)).sample(), tf.float32)
+#    dropout_input_mask =  tf.cast(
+#        tf.contrib.distributions.Bernoulli(tf.constant(np.ones((1,g_size,noOfForwardPasses)) * dropout_prob )).sample(), tf.float32)
+#    dropout_hidden_mask =  tf.cast(
+#        tf.contrib.distributions.Bernoulli(tf.constant(np.ones((1,cell_size,noOfForwardPasses)) * dropout_prob)).sample(), tf.float32)
+    ### TODO dropout prob needs to be a tensor, with different values for each weight!!!!!!!!!
     variances_locations = []
-    tau = tf.cast(tf.constant((1.0 - dropout_prob)*np.ones(batch_size)),tf.float32)
+    tau = tf.cast( (1.0 - dropout_probability)*np.ones(batch_size), tf.float32)
     # TODO: Create use dropout with seed 
     for t in range(nGlimpses):
         if t == 0:  # initialize the hidden state to be the zero vector
@@ -300,17 +283,17 @@ def model():
         forward_loc = []
         for forwardpass in range(noOfForwardPasses):
             # forward prop
-            noise_input = tf.squeeze(tf.slice(dropout_input_mask,[0,0,forwardpass],[1,g_size, 1]),[2])
-            noise_hidden = tf.squeeze(tf.slice(dropout_hidden_mask,[0,0,forwardpass],[1,g_size, 1]),[2])
+            #noise_input = tf.squeeze(tf.slice(dropout_input_mask,[0,0,forwardpass],[1,g_size, 1]),[2])
+            #noise_hidden = tf.squeeze(tf.slice(dropout_hidden_mask,[0,0,forwardpass],[1,g_size, 1]),[2])
             with tf.variable_scope("coreNetwork", reuse=REUSE):
                 # the next hidden state is a function of the previous hidden state and the current glimpse
                 # TODO: (gw) why didn't they just define the affine Transform
                 # weights below and not use the REUSE flag?
                 #hiddenState = tf.nn.relu(affineTransform(hiddenState_prev, cell_size) + (tf.matmul(glimpse, Wc_g_h) + Bc_g_h))
                 pre_hidden = tf.matmul(hiddenState_prev, Wc_h_h) + Bc_h_h
-                dropout_pre_hidden = tf.multiply(noise_hidden,pre_hidden)
+                dropout_pre_hidden = concrete_dropout( pre_hidden  ) #tf.multiply(noise_hidden,pre_hidden)
                 glimpse_input = (tf.matmul(glimpse, Wc_g_h) + Bc_g_h)
-                dropout_glimpse_input = tf.multiply(noise_input,glimpse_input)
+                dropout_glimpse_input = concrete_dropout( glimpse_input )  #tf.multiply(noise_input,glimpse_input)
                 # print(glimpse_input.get_shape().as_list())
                 # print(dropout_glimpse_input.get_shape().as_list())
                 # TODO: Same dropout map for hidden state changes 
@@ -437,7 +420,6 @@ def calc_reward(outputs, dropout_reward):
     train_op = optimizer.apply_gradients(zip(grads, var_list), global_step=global_step)
 
     return cost, reward, max_p_y, correct_y, train_op, b, tf.reduce_mean(b), tf.reduce_mean(R - b), lr, total_reward
-
 
 def preTrain(outputs):
     lr_r = 1e-3
@@ -577,6 +559,8 @@ with tf.device('/gpu:1'):
         Wa_h_a = weight_variable((cell_out_size, n_classes), "actionNet_wts_hidden_action", True)
         Ba_h_a = weight_variable((1,n_classes),  "actionNet_bias_hidden_action", True)
 
+        initial = tf.constant([0.5])  #tf.random_uniform(shape, minval=-0.1, maxval = 0.1)
+        dropout_probability = tf.Variable(initial, name="dropout_prob", trainable=True)
         # query the model ouput
         outputs, dropout_reward = model()
 
