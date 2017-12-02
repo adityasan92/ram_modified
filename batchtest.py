@@ -8,14 +8,11 @@ ed.set_seed(42)
 # Save older model.
 
 # use p as new, q as old
-# TODO: how do we make this part of the symbolic graph? Use a
-# placeholder for the old data!
 def kl_div_p_q(p_mean, p_std, q_mean, q_std):
     """KL divergence D_{KL}[p(x)||q(x)] for a fully factorized Gaussian.
     (Grant: I stole this code from openai/vime/dynamics/bnn)"""
     numerator = tf.square(p_mean - q_mean) + \
         tf.square(p_std) - tf.square(q_std)
-    print 'kl tensors'
     denominator = 2 * tf.square(q_std) + 1e-8
     return tf.reduce_sum(
         numerator / denominator + tf.log(q_std) - tf.log(p_std))
@@ -113,6 +110,7 @@ tf.global_variables_initializer().run()
 
 saver = tf.train.Saver()
 sess = ed.get_session()
+#sess = tf.Session()
 
 # Create a list of placeholders which we put the statistics into.
 # shape is [[mu1,var1],[mu2,var2],...] and mu1,var1 etc have their 

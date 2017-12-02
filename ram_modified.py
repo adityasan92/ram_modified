@@ -6,9 +6,89 @@ import time
 import random
 import sys
 import os
+from bnn import transition_model
+import cProfile
+import re
 
-import edward as ed
-from edward.models import Normal
+
+#class SimpleReplayPool(object):
+    #"""Replay pool"""
+
+    #def __init__(
+            #self, max_pool_size, observation_shape, action_dim,
+            #observation_dtype=theano.config.floatX,  # @UndefinedVariable
+            #action_dtype=theano.config.floatX):  # @UndefinedVariable
+        #self._observation_shape = observation_shape
+        #self._action_dim = action_dim
+        #self._observation_dtype = observation_dtype
+        #self._action_dtype = action_dtype
+        #self._max_pool_size = max_pool_size
+
+        #self._observations = np.zeros(
+            #(max_pool_size,) + observation_shape,
+            #dtype=observation_dtype
+        #)
+        #self._actions = np.zeros(
+            #(max_pool_size, action_dim),
+            #dtype=action_dtype
+        #)
+        #self._rewards = np.zeros(max_pool_size, dtype='float32')
+        #self._terminals = np.zeros(max_pool_size, dtype='uint8')
+        #self._bottom = 0
+        #self._top = 0
+        #self._size = 0
+
+    #def add_sample(self, observation, action, reward, terminal):
+        #self._observations[self._top] = observation
+        #self._actions[self._top] = action
+        #self._rewards[self._top] = reward
+        #self._terminals[self._top] = terminal
+        #self._top = (self._top + 1) % self._max_pool_size
+        #if self._size >= self._max_pool_size:
+            #self._bottom = (self._bottom + 1) % self._max_pool_size
+        #else:
+            #self._size = self._size + 1
+
+    #def random_batch(self, batch_size):
+        #assert self._size > batch_size
+        #indices = np.zeros(batch_size, dtype='uint64')
+        #transition_indices = np.zeros(batch_size, dtype='uint64')
+        #count = 0
+        #while count < batch_size:
+            #index = np.random.randint(
+                #self._bottom, self._bottom + self._size) % self._max_pool_size
+            ## make sure that the transition is valid: if we are at the end of the pool, we need to discard
+            ## this sample
+            #if index == self._size - 1 and self._size <= self._max_pool_size:
+                #continue
+            #transition_index = (index + 1) % self._max_pool_size
+            #indices[count] = index
+            #transition_indices[count] = transition_index
+            #count += 1
+        #return dict(
+            #observations=self._observations[indices],
+            #actions=self._actions[indices],
+            #rewards=self._rewards[indices],
+            #terminals=self._terminals[indices],
+            #next_observations=self._observations[transition_indices]
+        #)
+
+    #def mean_obs_act(self):
+        #if self._size >= self._max_pool_size:
+            #obs = self._observations
+            #act = self._actions
+        #else:
+            #obs = self._observations[:self._top + 1]
+            #act = self._actions[:self._top + 1]
+        #obs_mean = np.mean(obs, axis=0)
+        #obs_std = np.std(obs, axis=0)
+        #act_mean = np.mean(act, axis=0)
+        #act_std = np.std(act, axis=0)
+        #return obs_mean, obs_std, act_mean, act_std
+
+    #@property
+    #def size(self):
+        #return self._size
 
 try:
     xrange
@@ -318,7 +398,7 @@ def calc_reward(mems, glimpse_reps):
 
     # reward for all examples in the batch
     R = tf.cast(tf.equal(max_p_y, correct_y), tf.float32)
-    reward = tf.reduce_mean(R) # mean reward
+    reward_task = tf.reduce_mean(R) # mean reward (unaugmented)
     R = tf.reshape(R, (batch_size, 1))
 
     # We want to add the intrinsic rewards here.
@@ -326,14 +406,14 @@ def calc_reward(mems, glimpse_reps):
     # rather the timesteps KL-based intrinsic reward.
     # TODO: ensure that indexing over R_intrinsic is not shifted by 1.
     R = tf.tile(R, [1, (nGlimpses)])
-    r_intrinsic = tf.zeros(R.get_shape().as_list()) # TODO: change this line.
     R_intrinsic = [tf.zeros([batch_size]) for _ in xrange(nGlimpses)]
-    R_intrinsic[-1] = r_intrinsic[:,-1]
+    R_intrinsic[-1] = r_intrinsic_ph[:,-1]
     for g_id in xrange(nGlimpses-2, -1, -1):
-            R_intrinsic[g_id] = r_intrinsic[:,g_id] + R_intrinsic[g_id + 1]
+            R_intrinsic[g_id] = r_intrinsic_ph[:,g_id] + R_intrinsic[g_id + 1]
     R_intrinsic = tf.stack(R_intrinsic, axis=1)
 
     R += R_intrinsic
+    reward_augmented = tf.reduce_mean(R) # mean reward (unaugmented)
 
     R = tf.expand_dims(R, 2)
     R = tf.tile(R, [1, 1, 2])
@@ -360,7 +440,7 @@ def calc_reward(mems, glimpse_reps):
     # train_op = optimizer.minimize(cost, global_step)
     train_op = optimizer.apply_gradients(zip(grads, var_list), global_step=global_step)
 
-    return cost, reward, max_p_y, correct_y, train_op, b, tf.reduce_mean(b), tf.reduce_mean(R - b), lr
+    return cost, reward_task, reward_augmented, max_p_y, correct_y, train_op, b, tf.reduce_mean(b), tf.reduce_mean(R - b), lr
 
 
 def preTrain(outputs):
@@ -464,7 +544,12 @@ with tf.device('/gpu:1'):
         labels_placeholder = tf.placeholder(tf.float32, shape=(batch_size), name="labels_raw")
         onehot_labels_placeholder = tf.placeholder(tf.float32, shape=(batch_size, 10), name="labels_onehot")
         inputs_placeholder = tf.placeholder(tf.float32, shape=(batch_size, img_size * img_size), name="images")
+        r_intrinsic_ph = tf.placeholder(tf.float32, shape=(batch_size, nGlimpses))
 
+        # Transition model placeholders
+        g_prev_ph = tf.placeholder(tf.float32, [None, cell_size])
+        h_prev_ph = tf.placeholder(tf.float32, [None, cell_size])
+        h_out_ph = tf.placeholder(tf.float32, [None,cell_size])
         # declare the model parameters, here're naming rule:
         # the 1st captical letter: weights or bias (W = weights, B = bias)
         # the 2nd lowercase letter: the network (e.g.: g = glimpse network)
@@ -501,7 +586,12 @@ with tf.device('/gpu:1'):
         Ba_h_a = weight_variable((1,n_classes),  "actionNet_bias_hidden_action", True)
 
         # query the model ouput
+        print 'creating model...'
         outputs, glimpse_reps = model()
+        print 'creating bnn...'
+        bnn = transition_model(g_prev_ph,h_prev_ph, h_out_ph, cell_size)
+        print 'done creating models'
+
 
         # convert list of tensors to one big tensor
         sampled_locs = tf.concat(axis=0, values=sampled_locs)
@@ -514,7 +604,8 @@ with tf.device('/gpu:1'):
 
         # compute the reward
         reconstructionCost, reconstruction, train_op_r = preTrain(outputs)
-        cost, reward, predicted_labels, correct_labels, train_op, b, avg_b, rminusb, lr = calc_reward(outputs, glimpse_reps)
+        print 'creating rewards + loss tensors'
+        cost, reward_task, reward_aug, predicted_labels, correct_labels, train_op, b, avg_b, rminusb, lr = calc_reward(outputs, glimpse_reps)
 
         # tensorboard visualization for the parameters
         variable_summaries(Wg_l_h, "glimpseNet_wts_location_hidden")
@@ -538,7 +629,7 @@ with tf.device('/gpu:1'):
 
         # tensorboard visualization for the performance metrics
         tf.summary.scalar("reconstructionCost", reconstructionCost)
-        tf.summary.scalar("reward", reward)
+        tf.summary.scalar("reward", reward_task)
         tf.summary.scalar("cost", cost)
         tf.summary.scalar("mean(b)", avg_b)
         tf.summary.scalar("mean(R - b)", rminusb)
@@ -617,6 +708,8 @@ with tf.device('/gpu:1'):
 
 
             # training
+            r_intrinsic_vals = np.zeros([batch_size, nGlimpses])
+            print 'starting training'
             for epoch in range(start_step + 1, max_iters):
                 start_time = time.time()
 
@@ -626,25 +719,80 @@ with tf.device('/gpu:1'):
                 if translateMnist:
                     nextX, nextX_coord = convertTranslated(nextX, MNIST_SIZE, img_size)
 
-                feed_dict = {inputs_placeholder: nextX, labels_placeholder: nextY, \
-                             onehot_labels_placeholder: dense_to_one_hot(nextY)}
+                #feed_dict = {inputs_placeholder: nextX, \
+                             #onehot_labels_placeholder: dense_to_one_hot(nexty)}
+                feed_dict = {inputs_placeholder: nextX}
 
-                fetches = [train_op, cost, reward, predicted_labels, correct_labels, glimpse_images, avg_b, rminusb, \
-                           mean_locs, sampled_locs, lr]
+                #TODO: ignore everything in comment below this line before the double_loop.
+        #cost, reward_task, reward_aug, predicted_labels, correct_labels, train_op, b, avg_b, rminusb, lr = calc_reward(outputs, glimpse_reps)
+
+                #fetches = [train_op, cost, reward, predicted_labels, correct_labels, glimpse_images, avg_b, rminusb, \
+                           #mean_locs, sampled_locs, lr]
                 # feed them to the model
-                results = sess.run(fetches, feed_dict=feed_dict)
+                #results = sess.run(fetches, feed_dict=feed_dict)
 
-                _, cost_fetched, reward_fetched, prediction_labels_fetched, correct_labels_fetched, glimpse_images_fetched, \
-                avg_b_fetched, rminusb_fetched, mean_locs_fetched, sampled_locs_fetched, lr_fetched = results
+                # TODO: can we parallelize the intrinsic reward calculation? (it seems necessarily sequential)
 
+                # do forward pass to get info needed for calc_reward
+                # (probably memories)
+                print 'doing some forward passing'
+                forward_fetches = [outputs, glimpse_reps,
+                                   glimpse_images, mean_locs, sampled_locs]
+                forward_results = sess.run(forward_fetches,
+                                           feed_dict=feed_dict)
+                mem_vals, glimpse_rep_vals = forward_results[0:2]
+                glimpse_images_fetched, mean_locs_fetched, \
+                    sampled_locs_fetched = forward_results[2:]
+
+                # update replay pool with this information.
+
+                # calculate intrinsic reward (using forward pass info inserted
+                # into placeholders).
+                print 'calculating intrinsic rewards'
+                
+                bnn.construct_int_reward(mem_vals, glimpse_rep_vals,\
+                                         r_intrinsic_vals,start_time)
+                print 'finished calculating intrinsic rewards'
+
+                # do the bulk update using replay pool
+
+                # do the train_op with intrinsic reward and data from forward
+                # pass put into placeholders.
+                print 'computing rest of fetches (training included)'
+                rest_of_fetches = [train_op, cost, reward_task, reward_aug,
+                                   predicted_labels, correct_labels,
+                                   avg_b, rminusb, lr]
+
+                feed_dict_back = {k: v for (k, v) in zip(outputs, mem_vals)}
+                feed_dict_back[r_intrinsic_ph] = r_intrinsic_vals
+                feed_dict_back[sampled_locs] = sampled_locs_fetched
+                feed_dict_back[mean_locs] = mean_locs_fetched
+                feed_dict_back[glimpse_images] = glimpse_images_fetched
+                feed_dict_back[labels_placeholder] = nextY
+                feed_dict_back[inputs_placeholder] = nextX
+                feed_dict_back[onehot_labels_placeholder] = dense_to_one_hot(nextY)
+
+                rest_of_results = sess.run(rest_of_fetches,
+                                           feed_dict=feed_dict_back)
+
+                _,cost_fetched, reward_task_fetched, reward_aug_fetched, \
+                    predicted_labels_fetched, correct_labels_fetched, \
+                    avg_b_fetched, rminusb_fetched, lr_fetched \
+                    = rest_of_results
 
                 duration = time.time() - start_time
+                print duration
 
                 if epoch % 20 == 0:
-                    print(('Step %d: cost = %.5f reward = %.5f (%.3f sec) b = %.5f R-b = %.5f, LR = %.5f'
-                          % (epoch, cost_fetched, reward_fetched, duration, avg_b_fetched, rminusb_fetched, lr_fetched)))
-                    summary_str = sess.run(summary_op, feed_dict=feed_dict)
-                    summary_writer.add_summary(summary_str, epoch)
+                    print(('Step %d: cost = %.5f reward_task = %.5f \
+                           reward_aug = %.5f (%.3f sec) b = %.5f R-b \
+                           = %.5f, LR = %.5f'
+                          % (epoch, cost_fetched, reward_task_fetched,
+                             reward_aug_fetched, duration, avg_b_fetched,
+                             rminusb_fetched, lr_fetched)))
+                    # TODO: bring this back in.
+                    #summary_str = sess.run(summary_op, feed_dict=feed_dict)
+                    #summary_writer.add_summary(summary_str, epoch)
                     # if saveImgs:
                     #     plt.savefig(imgsFolderName + simulationName + '_ep%.6d.png' % (epoch))
 
@@ -653,10 +801,10 @@ with tf.device('/gpu:1'):
                         evaluate()
 
                     ##### DRAW WINDOW ################
-                    f_glimpse_images = np.reshape(glimpse_images_fetched, \
-                                                  (nGlimpses, batch_size, depth, sensorBandwidth, sensorBandwidth))
 
                     if draw:
+                        f_glimpse_images = np.reshape(glimpse_images_fetched, \
+                                                      (nGlimpses, batch_size, depth, sensorBandwidth, sensorBandwidth))
                         if animate:
                             fillList = False
                             if len(plotImgs) == 0:
