@@ -166,19 +166,19 @@ def glimpseSensor(img, normLoc):
 
     return zooms
 
-def concrete_dropout(x):
+def concrete_dropout(x, dropout_prob):
         eps = 1e-7
         temp = 0.1
         unif_noise = tf.random_uniform(shape=tf.shape(x))
         drop_prob = (
-            tf.log(dropout_probability + eps)
-            - tf.log(1. - dropout_probability + eps)
+            tf.log(dropout_prob + eps)
+            - tf.log(1. - dropout_prob + eps)
             + tf.log(unif_noise + eps)
             - tf.log(1. - unif_noise + eps)
         )
         drop_prob = tf.nn.sigmoid(drop_prob / temp)
         random_tensor = 1. - drop_prob
-        retain_prob = 1. - dropout_probability
+        retain_prob = 1. - dropout_prob
         x *= random_tensor
         x /= retain_prob
         return x
@@ -291,9 +291,10 @@ def model():
                 # weights below and not use the REUSE flag?
                 #hiddenState = tf.nn.relu(affineTransform(hiddenState_prev, cell_size) + (tf.matmul(glimpse, Wc_g_h) + Bc_g_h))
                 pre_hidden = tf.matmul(hiddenState_prev, Wc_h_h) + Bc_h_h
-                dropout_pre_hidden = concrete_dropout( pre_hidden  ) #tf.multiply(noise_hidden,pre_hidden)
+                print(pre_hidden.get_shape().as_list(),"pre hidden state shape")
+                dropout_pre_hidden = concrete_dropout(pre_hidden, dropout_probability_hidden) #tf.multiply(noise_hidden,pre_hidden)
                 glimpse_input = (tf.matmul(glimpse, Wc_g_h) + Bc_g_h)
-                dropout_glimpse_input = concrete_dropout( glimpse_input )  #tf.multiply(noise_input,glimpse_input)
+                dropout_glimpse_input = concrete_dropout(glimpse_input, dropout_probability_input)
                 # print(glimpse_input.get_shape().as_list())
                 # print(dropout_glimpse_input.get_shape().as_list())
                 # TODO: Same dropout map for hidden state changes 
@@ -561,6 +562,15 @@ with tf.device('/gpu:1'):
 
         initial = tf.constant([0.5])  #tf.random_uniform(shape, minval=-0.1, maxval = 0.1)
         dropout_probability = tf.Variable(initial, name="dropout_prob", trainable=True)
+        
+        #dropout probability for hidden weights 
+        initial_hidden = tf.constant(0.5, shape=[1,cell_size])
+        dropout_probability_hidden = tf.Variable(initial_hidden, name="dropout_prob_hidden", trainable=True)
+
+        #dropout probability for input weights
+        initial_input = tf.constant(0.5, shape=[1, g_size])
+        dropout_probability_input = tf.Variable(initial_input, name="dropout_prob_input", trainable=True)
+
         # query the model ouput
         outputs, dropout_reward = model()
 
@@ -691,12 +701,12 @@ with tf.device('/gpu:1'):
                              onehot_labels_placeholder: dense_to_one_hot(nextY)}
 
                 fetches = [train_op, cost, reward, predicted_labels, correct_labels, glimpse_images, avg_b, rminusb, \
-                           mean_locs, sampled_locs, lr, dropout_reward, total_reward]
+                           mean_locs, sampled_locs, lr, dropout_reward, total_reward, dropout_probability_hidden]
                 # feed them to the model
                 results = sess.run(fetches, feed_dict=feed_dict)
 
                 _, cost_fetched, reward_fetched, prediction_labels_fetched, correct_labels_fetched, glimpse_images_fetched, \
-                avg_b_fetched, rminusb_fetched, mean_locs_fetched, sampled_locs_fetched, lr_fetched, dropout_reward_fetched, total_reward_fetched = results
+                avg_b_fetched, rminusb_fetched, mean_locs_fetched, sampled_locs_fetched, lr_fetched, dropout_reward_fetched, total_reward_fetched, dropout_probability_hidden_fetched = results
 
 
                 duration = time.time() - start_time
@@ -712,6 +722,7 @@ with tf.device('/gpu:1'):
 
                     if epoch % 1000 == 0:
                         saver.save(sess, save_dir + save_prefix + str(epoch) + ".ckpt")
+                        print("dropout_pre_hidden_fetched", str(dropout_probability_hidden_fetched))
                         evaluate()
 
                     ##### DRAW WINDOW ################
