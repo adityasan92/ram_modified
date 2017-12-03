@@ -217,39 +217,6 @@ def get_next_input(output,flag_save):
 
     return sample_loc
 
-def get_next_input_2(output):
-    # the next location is computed by the location network
-    # TODO: (GW) interesting to see here that they don't backprop to diff
-    # timesteps.
-    core_net_out = tf.stop_gradient(output)
-
-    # baseline = tf.sigmoid(tf.matmul(core_net_out, Wb_h_b) + Bb_h_b)
-    # baseline = tf.sigmoid(tf.matmul(core_net_out, Wb_h_b) + Bb_h_b)
-    # baselines.append(baseline)
-
-    # compute the next location, then impose noise
-    if eyeCentered:
-        # add the last sampled glimpse location
-        # TODO max(-1, min(1, u + N(output, sigma) + prevLoc))
-        mean_loc = tf.maximum(-1.0, tf.minimum(1.0, tf.matmul(core_net_out, Wl_h_l) + sampled_locs[-1] ))
-    else:
-        # mean_loc = tf.clip_by_value(tf.matmul(core_net_out, Wl_h_l) + Bl_h_l, -1, 1)
-        mean_loc = tf.matmul(core_net_out, Wl_h_l) + Bl_h_l
-        mean_loc = tf.clip_by_value(mean_loc, -1, 1)
-    # mean_loc = tf.stop_gradient(mean_loc)
-    # mean_locs.append(mean_loc)
-
-    # add noise
-    # sample_loc = tf.tanh(mean_loc + tf.random_normal(mean_loc.get_shape(), 0, loc_sd))
-    sample_loc = tf.maximum(-1.0, tf.minimum(1.0, mean_loc + tf.random_normal(mean_loc.get_shape(), 0, loc_sd)))
-
-    # don't propagate throught the locations
-    # TODO: (GW) do they put a stop grad here to stop REINFORCE signal from
-    # affecting anything beyond the theta_l box? Seems like why they do it.
-    sample_loc = tf.stop_gradient(sample_loc)
-    # sampled_locs.append(sample_loc)
-
-    return sample_loc
 
 
 def affineTransform(x,output_dim):

@@ -46,7 +46,7 @@ draw = False
 animate = False
 
 # conditions
-translateMnist = 0
+translateMnist = 1
 eyeCentered = 0
 
 preTraining = 0
