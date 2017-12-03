@@ -264,7 +264,7 @@ def affineTransform(x,output_dim):
 
 def model():
 
-    dropout_prob = 0.7
+    dropout_prob = 0.5
 
     # initialize the location under unif[-1,1], for all example in the batch
     initial_loc = tf.random_uniform((batch_size, 2), minval=-1, maxval=1)
@@ -419,13 +419,15 @@ def calc_reward(outputs, dropout_reward):
     p_loc = gaussian_pdf(mean_locs, sampled_locs)
 
     # define the cost function
+    weight_reg_strength = 0.001
     reinforce_terms = tf.reshape(tf.log(p_loc + SMALL_NUM) * (R-no_grad_b), (batch_size, nGlimpses*2))
     reinforce_reg_terms = tf.reshape(tf.square(R-b),(batch_size, nGlimpses*2))
     J = tf.concat(axis=1, values=[ tf.log(p_y + SMALL_NUM) * (onehot_labels_placeholder),reinforce_terms])
     J = tf.reduce_sum(J, 1)
     J = J - tf.reduce_sum(reinforce_reg_terms, 1)
     J = tf.reduce_mean(J, 0)
-    cost = -J
+    L2_weight_sums = tf.nn.l2_loss(Wc_h_h) + tf.nn.l2_loss(Bc_h_h) + tf.nn.l2_loss(Wc_g_h) + tf.nn.l2_loss(Bc_g_h)
+    cost = -J + weight_reg_strength * L2_weight_sums
     var_list = tf.trainable_variables()
     grads = tf.gradients(cost, var_list)
     grads, _ = tf.clip_by_global_norm(grads, 0.5)

@@ -166,22 +166,24 @@ def glimpseSensor(img, normLoc):
 
     return zooms
 
-def concrete_dropout(x, dropout_prob):
+def concrete_dropout(x, dropout_prob_unclipped):
+        dropout_prob_unclipped = tf.stack([dropout_prob_unclipped] * 5,axis=2)
         eps = 1e-7
         temp = 0.1
-        unif_noise = tf.random_uniform(shape=tf.shape(x))
-        drop_prob = (
+        dropout_prob = tf.clip_by_value( dropout_prob_unclipped, eps, 1.0-eps )
+        unif_noise = tf.random_uniform(shape=tf.shape(dropout_prob))
+        drop_prob_init = (
             tf.log(dropout_prob + eps)
             - tf.log(1. - dropout_prob + eps)
             + tf.log(unif_noise + eps)
             - tf.log(1. - unif_noise + eps)
         )
-        drop_prob = tf.nn.sigmoid(drop_prob / temp)
+        drop_prob = tf.nn.sigmoid(drop_prob_init / temp)
         random_tensor = 1. - drop_prob
-        retain_prob = 1. - dropout_prob
-        x *= random_tensor
-        x /= retain_prob
-        return x
+        retain_prob = 1. - dropout_prob + eps
+        xx = tf.multiply(x, random_tensor)
+        xx /= retain_prob
+        return xx 
 
 # implements the input network
 def get_glimpse(loc):
@@ -246,8 +248,6 @@ def affineTransform(x,output_dim):
 
 def model():
 
-    dropout_prob = 0.7
-
     # initialize the location under unif[-1,1], for all example in the batch
     initial_loc = tf.random_uniform((batch_size, 2), minval=-1, maxval=1)
     mean_locs.append(initial_loc)
@@ -270,9 +270,11 @@ def model():
 #        tf.contrib.distributions.Bernoulli(tf.constant(np.ones((1,g_size,noOfForwardPasses)) * dropout_prob )).sample(), tf.float32)
 #    dropout_hidden_mask =  tf.cast(
 #        tf.contrib.distributions.Bernoulli(tf.constant(np.ones((1,cell_size,noOfForwardPasses)) * dropout_prob)).sample(), tf.float32)
+    dropout_hidden_mask = concrete_dropout(tf.cast(tf.constant(np.ones((1,cell_size,noOfForwardPasses))), tf.float32), dropout_probability_hidden) 
+    dropout_input_mask = concrete_dropout(tf.cast(tf.constant(np.ones((1,g_size,noOfForwardPasses))), tf.float32), dropout_probability_input) 
     ### TODO dropout prob needs to be a tensor, with different values for each weight!!!!!!!!!
     variances_locations = []
-    tau = tf.cast( (1.0 - dropout_probability)*np.ones(batch_size), tf.float32)
+    tau = tf.constant(1.0)  #tf.cast( (1.0 - dropout_probability)*np.ones(batch_size), tf.float32)
     # TODO: Create use dropout with seed 
     for t in range(nGlimpses):
         if t == 0:  # initialize the hidden state to be the zero vector
@@ -283,8 +285,8 @@ def model():
         forward_loc = []
         for forwardpass in range(noOfForwardPasses):
             # forward prop
-            #noise_input = tf.squeeze(tf.slice(dropout_input_mask,[0,0,forwardpass],[1,g_size, 1]),[2])
-            #noise_hidden = tf.squeeze(tf.slice(dropout_hidden_mask,[0,0,forwardpass],[1,g_size, 1]),[2])
+            noise_input = tf.squeeze(tf.slice(dropout_input_mask,[0,0,forwardpass],[1,g_size, 1]),[2])
+            noise_hidden = tf.squeeze(tf.slice(dropout_hidden_mask,[0,0,forwardpass],[1,cell_size, 1]),[2])
             with tf.variable_scope("coreNetwork", reuse=REUSE):
                 # the next hidden state is a function of the previous hidden state and the current glimpse
                 # TODO: (gw) why didn't they just define the affine Transform
@@ -292,9 +294,9 @@ def model():
                 #hiddenState = tf.nn.relu(affineTransform(hiddenState_prev, cell_size) + (tf.matmul(glimpse, Wc_g_h) + Bc_g_h))
                 pre_hidden = tf.matmul(hiddenState_prev, Wc_h_h) + Bc_h_h
                 print(pre_hidden.get_shape().as_list(),"pre hidden state shape")
-                dropout_pre_hidden = concrete_dropout(pre_hidden, dropout_probability_hidden) #tf.multiply(noise_hidden,pre_hidden)
+                dropout_pre_hidden = tf.multiply(noise_hidden,pre_hidden)
                 glimpse_input = (tf.matmul(glimpse, Wc_g_h) + Bc_g_h)
-                dropout_glimpse_input = concrete_dropout(glimpse_input, dropout_probability_input)
+                dropout_glimpse_input = tf.multiply(noise_input,glimpse_input) #concrete_dropout(glimpse_input, dropout_probability_input)
                 # print(glimpse_input.get_shape().as_list())
                 # print(dropout_glimpse_input.get_shape().as_list())
                 # TODO: Same dropout map for hidden state changes 
@@ -325,6 +327,13 @@ def model():
             loc = mean #get_next_input(hiddenState)
             # next_location_passes.append(loc)
             #print(loc.get_shape().as_list())
+            #def tt():
+            #  print('FUCCCCCCCCCCCCCking nan')  
+            #  return True
+            #res = tf.cond(tf.is_nan(tf.reduce_mean(loc)), tt, lambda: False)
+            
+            #aaa=tf.Print(loc,[loc,"LOC"])
+            #glimpse = get_glimpse(aaa)
             glimpse = get_glimpse(loc)
         else:
             first_hiddenState = tf.stop_gradient(hiddenState)
@@ -392,9 +401,7 @@ def calc_reward(outputs, dropout_reward):
     for g_id in xrange(nGlimpses-2, -1, -1):
             R_intrinsic[g_id] = r_intrinsic[:,g_id] + R_intrinsic[g_id + 1]
     R_intrinsic = tf.stack(R_intrinsic, axis=1)
-
     R += R_intrinsic
-
     R = tf.expand_dims(R, 2)
     R = tf.tile(R, [1, 1, 2])
     total_reward = tf.reduce_mean(R)
@@ -409,7 +416,9 @@ def calc_reward(outputs, dropout_reward):
     J = tf.reduce_sum(J, 1)
     J = J - tf.reduce_sum(reinforce_reg_terms, 1)
     J = tf.reduce_mean(J, 0)
-    cost = -J
+    weight_reg_strength = 0.001
+    L2_weight_reg_sums = tf.nn.l2_loss(Wc_h_h) + tf.nn.l2_loss(Bc_h_h) + tf.nn.l2_loss(Wc_g_h) + tf.nn.l2_loss(Bc_g_h)
+    cost = -J + weight_reg_strength * L2_weight_reg_sums
     var_list = tf.trainable_variables()
     grads = tf.gradients(cost, var_list)
     grads, _ = tf.clip_by_global_norm(grads, 0.5)
@@ -687,6 +696,9 @@ with tf.device('/gpu:1'):
                                 # plt.show()
 
 
+            # Extra check for numerics
+           # check = tf.add_check_numerics_ops()
+            
             # training
             for epoch in range(start_step + 1, max_iters):
                 start_time = time.time()
@@ -700,21 +712,20 @@ with tf.device('/gpu:1'):
                 feed_dict = {inputs_placeholder: nextX, labels_placeholder: nextY, \
                              onehot_labels_placeholder: dense_to_one_hot(nextY)}
 
+
                 fetches = [train_op, cost, reward, predicted_labels, correct_labels, glimpse_images, avg_b, rminusb, \
-                           mean_locs, sampled_locs, lr, dropout_reward, total_reward, dropout_probability_hidden]
+                           mean_locs, sampled_locs, lr, dropout_reward, total_reward, dropout_probability_hidden, dropout_probability_input]#, check]
                 # feed them to the model
                 results = sess.run(fetches, feed_dict=feed_dict)
 
                 _, cost_fetched, reward_fetched, prediction_labels_fetched, correct_labels_fetched, glimpse_images_fetched, \
-                avg_b_fetched, rminusb_fetched, mean_locs_fetched, sampled_locs_fetched, lr_fetched, dropout_reward_fetched, total_reward_fetched, dropout_probability_hidden_fetched = results
-
+                avg_b_fetched, rminusb_fetched, mean_locs_fetched, sampled_locs_fetched, lr_fetched, dropout_reward_fetched, total_reward_fetched, dropout_probability_hidden_fetched,dropout_probability_input_fetched = results
 
                 duration = time.time() - start_time
 
                 if epoch % 100 == 0:
                     print(('Step %d: cost = %.5f reward = %.5f (%.3f sec) b = %.5f R-b = %.5f, LR = %.5f'
                           % (epoch, cost_fetched, reward_fetched, duration, avg_b_fetched, rminusb_fetched, lr_fetched)))
-                    print("Dropout reward",str(np.mean(dropout_reward_fetched)), "Total Reward",total_reward_fetched)
                     summary_str = sess.run(summary_op, feed_dict=feed_dict)
                     summary_writer.add_summary(summary_str, epoch)
                     # if saveImgs:
@@ -722,7 +733,9 @@ with tf.device('/gpu:1'):
 
                     if epoch % 1000 == 0:
                         saver.save(sess, save_dir + save_prefix + str(epoch) + ".ckpt")
+                        print("Dropout reward",str(dropout_reward_fetched), "Total Reward",total_reward_fetched)
                         print("dropout_pre_hidden_fetched", str(dropout_probability_hidden_fetched))
+                        print("dropout_pre_input_fetched", str(dropout_probability_input_fetched))
                         evaluate()
 
                     ##### DRAW WINDOW ################
