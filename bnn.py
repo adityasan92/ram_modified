@@ -90,16 +90,18 @@ class transition_model(object):
                 self.glimpse_update = tf.while_loop(term, body, [i],
                                                     parallel_iterations=1)
             # TODO: we need to supply data?
-            self.inference.initialize(n_samples=10)
-            self.inf_ops = [self.inference.train,
-                            self.inference.increment_t,
-                            self.inference.loss]
-            self.glimpse_update = self.inf_ops
+            #self.inference.initialize(n_samples=10)
+            #self.inf_ops = [self.inference.train,
+                            #self.inference.increment_t,
+                            #self.inference.loss]
+            #self.glimpse_update = self.inf_ops
         else:
-            self.inference.initialize(n_samples=10)
-            self.inf_ops = [self.inference.train,
-                            self.inference.increment_t,
-                            self.inference.loss]
+            # the user must initialize on their own.
+            #self.inference.initialize(n_samples=10)
+            #self.inf_ops = [self.inference.train,
+                            #self.inference.increment_t,
+                            #self.inference.loss]
+            self.inf_ops = None
 
 
     def _create_net(self):
@@ -138,7 +140,6 @@ class transition_model(object):
         numerator = tf.square(p_mean - q_mean) + \
             tf.square(p_std) - tf.square(q_std)
         denominator = 2 * tf.square(q_std) + 1.e-8
-        #denom = tf.identity(tf.log(q_std), name='denominator')
         return tf.reduce_sum(
             numerator / denominator + tf.log(q_std) - tf.log(p_std))
 

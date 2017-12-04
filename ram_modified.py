@@ -7,6 +7,7 @@ import random
 import sys
 import os
 from bnn import transition_model
+from replaypool import SimpleReplayPool
 
 try:
     xrange
@@ -301,6 +302,8 @@ def gaussian_pdf(mean, sample):
 
 
 def calc_reward(mems, glimpse_reps, r_intrinsic):
+    eta = tf.Variable(0.0, trainable=False)
+    r_intrinsic = eta*r_intrinsic
     reward_intrinsic = tf.reduce_mean(r_intrinsic)
     # outputs are the sequence of hidden states.
 
@@ -365,7 +368,7 @@ def calc_reward(mems, glimpse_reps, r_intrinsic):
     # train_op = optimizer.minimize(cost, global_step)
     train_op = optimizer.apply_gradients(zip(grads, var_list), global_step=global_step)
 
-    return cost, reward_task, reward_augmented, reward_intrinsic, max_p_y, correct_y, train_op, b, tf.reduce_mean(b), tf.reduce_mean(R - b), lr
+    return cost, reward_task, reward_augmented, reward_intrinsic, max_p_y, correct_y, train_op, b, tf.reduce_mean(b), tf.reduce_mean(R - b), lr, eta
 
 
 def preTrain(outputs):
@@ -516,6 +519,10 @@ with tf.device('/gpu:1'):
         print 'creating bnn...'
         # create mother BNN + its children (the workers over batch and time)
         mother = transition_model(g_prev_ph,h_prev_ph, h_out_ph, cell_size, -1)
+        mother.inference.initialize(n_iter=500, n_samples=5, scale={mother.s: (10./500)})
+        mother.inf_ops = [mother.inference.train,
+                          mother.inference.increment_t,
+                          mother.inference.loss]
         children = {}
         worker_id = 0
         batch_rewards = [None]*(batch_size)
@@ -537,7 +544,7 @@ with tf.device('/gpu:1'):
                 # we ensure that training occurs before attempting
                 # to compute the intrinsic rewards.
                 print b,t
-                with tf.control_dependencies(bnn.glimpse_update):
+                with tf.control_dependencies([bnn.glimpse_update]):
                     traj_rewards[t] = bnn.kl_to_mother()
 
 
@@ -550,9 +557,8 @@ with tf.device('/gpu:1'):
         def get_median(v):
             v = tf.reshape(v, [-1])
             m = v.get_shape()[0]//2
-            return tf.nn.top_k(v, m, name='denominator').values[m-1]
+            return tf.nn.top_k(v, m).values[m-1]
         med = get_median(r_intrinsic)
-        #print sess.run(med)
         r_intrinsic = r_intrinsic/med
         print 'done creating models'
 
@@ -569,7 +575,7 @@ with tf.device('/gpu:1'):
         # compute the reward
         reconstructionCost, reconstruction, train_op_r = preTrain(outputs)
         print 'creating rewards + loss tensors'
-        cost, reward_task, reward_aug, reward_intrinsic, predicted_labels, correct_labels, train_op, b, avg_b, rminusb, lr = calc_reward(outputs, glimpse_reps, r_intrinsic)
+        cost, reward_task, reward_aug, reward_intrinsic, predicted_labels, correct_labels, train_op, b, avg_b, rminusb, lr, eta = calc_reward(outputs, glimpse_reps, r_intrinsic)
 
 		# tensorboard visualization for the parameters
         variable_summaries(Wg_l_h, "glimpseNet_wts_location_hidden")
@@ -668,6 +674,10 @@ with tf.device('/gpu:1'):
                                 # plt.show()
 
 
+            # Define replay pool
+            pool = SimpleReplayPool(500, (256,), 256)
+
+
             # training
             print 'starting training'
             for epoch in range(start_step + 1, max_iters):
@@ -684,22 +694,50 @@ with tf.device('/gpu:1'):
 
                 #fetches = [train_op, cost, reward_task, reward_aug, reward_intrinsic, predicted_labels, correct_labels, glimpse_images, avg_b, rminusb, \
                            #mean_locs, sampled_locs, lr, outputs, glimpse_reps]
-                denom = tf.get_default_graph().get_tensor_by_name('denominator:0')
-                fetches = [denom, train_op, cost, reward_task, reward_aug, reward_intrinsic, predicted_labels, correct_labels, glimpse_images, avg_b, rminusb, \
+                fetches = [train_op, cost, reward_task, reward_aug, reward_intrinsic, predicted_labels, correct_labels, glimpse_images, avg_b, rminusb, \
                            mean_locs, sampled_locs, lr, outputs, glimpse_reps]
                 # feed them to the model
                 results = sess.run(fetches, feed_dict=feed_dict)
 
-                denom_fetched, _, cost_fetched, reward_task_fetched, reward_aug_fetched, r_intrinsic_fetched, \
+                _, cost_fetched, reward_task_fetched, reward_aug_fetched, r_intrinsic_fetched, \
                     prediction_labels_fetched, correct_labels_fetched, \
                     glimpse_images_fetched, avg_b_fetched, \
                     rminusb_fetched, mean_locs_fetched, \
                     sampled_locs_fetched, lr_fetched, outputs_fetched, glimpse_reps_fetched = results
 
+                # Add samples to replay pool
+                for b in xrange(batch_size):
+                    # for a given trajectory, add sequentially to
+                    # the FIFO replay pool over the glimpses.
+                    for t in xrange(nGlimpses):
+                        #b_out_traj = [i[b] for i in outputs_fetched]
+                        #b_glimpse_traj = [i[b] for i in glimpse_reps_fetched]
+                        obsv = outputs_fetched[t][b]
+                        act = glimpse_reps_fetched[t][b]
+                        pool.add_sample(obsv, act)
+
+                # update the mother.
+                # TODO: tune this?
+                mother_epochs = 500 #  n_updates_per_sample
+                mother_batch_size = 10 # pool_batch_size
+                min_pool_size = 500 # same (dont train unless pool filled)
+                if epoch % 20 == 0 and min_pool_size <= pool._size:
+                    sess.run(tf.assign(eta, 1.0))
+                    for _ in xrange(mother_epochs):
+                        mother_batch = pool.random_batch(mother_batch_size)
+                        #print mother_batch['actions'].shape
+                        #print mother_batch['observations'].shape
+                        #print mother_batch['next_observations'].shape
+                        feed_dict = {g_prev_ph: mother_batch['actions'],
+                                     h_prev_ph: mother_batch['observations'],
+                                     h_out_ph: mother_batch['next_observations']}
+                        #sess.run(mother.inf_ops, feed_dict=feed_dict)
+                        #mother.inference.run(feed_dict=feed_dict)
+                        mother.inference.update(feed_dict)
+
                 duration = time.time() - start_time
 
                 if epoch % 20 == 0:
-                    print denom_fetched
                     print(('Step %d: cost = %.5f reward_task = %.5f reward_aug = %.5f reward_intrinsic = %.5f (%.3f sec) b = %.5f R-b = %.5f, LR = %.5f'
                           % (epoch, cost_fetched, reward_task_fetched,
                              reward_aug_fetched, r_intrinsic_fetched, duration, avg_b_fetched,
