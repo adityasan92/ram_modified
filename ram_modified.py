@@ -7,88 +7,6 @@ import random
 import sys
 import os
 from bnn import transition_model
-#import cProfile
-#import re
-
-
-#class SimpleReplayPool(object):
-    #"""Replay pool"""
-
-    #def __init__(
-            #self, max_pool_size, observation_shape, action_dim,
-            #observation_dtype=theano.config.floatX,  # @UndefinedVariable
-            #action_dtype=theano.config.floatX):  # @UndefinedVariable
-        #self._observation_shape = observation_shape
-        #self._action_dim = action_dim
-        #self._observation_dtype = observation_dtype
-        #self._action_dtype = action_dtype
-        #self._max_pool_size = max_pool_size
-
-        #self._observations = np.zeros(
-            #(max_pool_size,) + observation_shape,
-            #dtype=observation_dtype
-        #)
-        #self._actions = np.zeros(
-            #(max_pool_size, action_dim),
-            #dtype=action_dtype
-        #)
-        #self._rewards = np.zeros(max_pool_size, dtype='float32')
-        #self._terminals = np.zeros(max_pool_size, dtype='uint8')
-        #self._bottom = 0
-        #self._top = 0
-        #self._size = 0
-
-    #def add_sample(self, observation, action, reward, terminal):
-        #self._observations[self._top] = observation
-        #self._actions[self._top] = action
-        #self._rewards[self._top] = reward
-        #self._terminals[self._top] = terminal
-        #self._top = (self._top + 1) % self._max_pool_size
-        #if self._size >= self._max_pool_size:
-            #self._bottom = (self._bottom + 1) % self._max_pool_size
-        #else:
-            #self._size = self._size + 1
-
-    #def random_batch(self, batch_size):
-        #assert self._size > batch_size
-        #indices = np.zeros(batch_size, dtype='uint64')
-        #transition_indices = np.zeros(batch_size, dtype='uint64')
-        #count = 0
-        #while count < batch_size:
-            #index = np.random.randint(
-                #self._bottom, self._bottom + self._size) % self._max_pool_size
-            ## make sure that the transition is valid: if we are at the end of the pool, we need to discard
-            ## this sample
-            #if index == self._size - 1 and self._size <= self._max_pool_size:
-                #continue
-            #transition_index = (index + 1) % self._max_pool_size
-            #indices[count] = index
-            #transition_indices[count] = transition_index
-            #count += 1
-        #return dict(
-            #observations=self._observations[indices],
-            #actions=self._actions[indices],
-            #rewards=self._rewards[indices],
-            #terminals=self._terminals[indices],
-            #next_observations=self._observations[transition_indices]
-        #)
-
-    #def mean_obs_act(self):
-        #if self._size >= self._max_pool_size:
-            #obs = self._observations
-            #act = self._actions
-        #else:
-            #obs = self._observations[:self._top + 1]
-            #act = self._actions[:self._top + 1]
-        #obs_mean = np.mean(obs, axis=0)
-        #obs_std = np.std(obs, axis=0)
-        #act_mean = np.mean(act, axis=0)
-        #act_std = np.std(act, axis=0)
-        #return obs_mean, obs_std, act_mean, act_std
-
-    #@property
-    #def size(self):
-        #return self._size
 
 try:
     xrange
@@ -174,6 +92,7 @@ else:
 channels = 1                # mnist are grayscale images
 totalSensorBandwidth = depth * channels * (sensorBandwidth **2)
 nGlimpses = 6               # number of glimpses
+nGlimpses = 3 # TODO: remove this.
 loc_sd = 0.22               # std when setting the location
 
 # network units
@@ -325,15 +244,18 @@ def model():
 
     # set up the recurrent structure
     inputs = [0] * nGlimpses
-    outputs = [0] * nGlimpses
+    #outputs = [0] * nGlimpses
+    outputs = [0] * (nGlimpses+1)
     glimpse_reps = [0] * nGlimpses
     glimpse = initial_glimpse
     REUSE = None
     for t in range(nGlimpses):
         if t == 0:  # initialize the hidden state to be the zero vector
             hiddenState_prev = tf.zeros((batch_size, cell_size))
+            outputs[0] = hiddenState_prev
         else:
-            hiddenState_prev = outputs[t-1]
+            #hiddenState_prev = outputs[t-1]
+            hiddenState_prev = outputs[t]
 
         # forward prop
         with tf.variable_scope("coreNetwork", reuse=REUSE):
@@ -346,7 +268,7 @@ def model():
 
         # save the current glimpse and the hidden state
         inputs[t] = glimpse
-        outputs[t] = hiddenState
+        outputs[t+1] = hiddenState
         glimpse_reps[t] = glimpse_rep
         # get the next input glimpse
         if t != nGlimpses -1:
@@ -417,7 +339,6 @@ def calc_reward(mems, glimpse_reps, r_intrinsic):
     R_intrinsic = tf.stack(R_intrinsic, axis=1)
 
     R += R_intrinsic
-    #reward_augmented = tf.reduce_mean(R) # mean reward (unaugmented)
 
     R = tf.expand_dims(R, 2)
     R = tf.tile(R, [1, 1, 2])
@@ -434,7 +355,6 @@ def calc_reward(mems, glimpse_reps, r_intrinsic):
     J = J - tf.reduce_sum(reinforce_reg_terms, 1)
     J = tf.reduce_mean(J, 0)
     cost = -J
-    # TODO: fix this here.
     var_list = tf.trainable_variables(scope='ram')
     grads = tf.gradients(cost, var_list)
     grads, _ = tf.clip_by_global_norm(grads, 0.5)
@@ -600,8 +520,8 @@ with tf.device('/gpu:1'):
         worker_id = 0
         batch_rewards = [None]*(batch_size)
         for b in xrange(batch_size): # create duplicate bnns
-            traj_rewards = [None]*(nGlimpses-1)
-            for t in xrange(nGlimpses-1):
+            traj_rewards = [None]*(nGlimpses)
+            for t in xrange(nGlimpses):
                 # we connect the children BNNs right to RAM.
                 # Note there is a stop gradient used here to effectively
                 # make these placeholders.
@@ -617,9 +537,8 @@ with tf.device('/gpu:1'):
                 # we ensure that training occurs before attempting
                 # to compute the intrinsic rewards.
                 print b,t
-                #with tf.control_dependencies([bnn.glimpse_update]):
                 with tf.control_dependencies(bnn.glimpse_update):
-                    traj_rewards[t] = bnn.kl_to_mother_op
+                    traj_rewards[t] = bnn.kl_to_mother()
 
 
             # stack into intrinsics over traj
@@ -631,9 +550,10 @@ with tf.device('/gpu:1'):
         def get_median(v):
             v = tf.reshape(v, [-1])
             m = v.get_shape()[0]//2
-            return tf.nn.top_k(v, m).values[m-1]
-        #med = get_median(r_intrinsic)
-        #r_intrinsic = r_intrinsic/med
+            return tf.nn.top_k(v, m, name='denominator').values[m-1]
+        med = get_median(r_intrinsic)
+        #print sess.run(med)
+        r_intrinsic = r_intrinsic/med
         print 'done creating models'
 
 
@@ -696,9 +616,6 @@ with tf.device('/gpu:1'):
 
         #b_fetched = np.zeros((batch_size, (nGlimpses)*2))
 
-        #init = tf.global_variables_initializer()
-        #sess.run(init)
-
         if eval_only:
             evaluate()
         else:
@@ -752,7 +669,6 @@ with tf.device('/gpu:1'):
 
 
             # training
-            r_intrinsic_vals = np.zeros([batch_size, nGlimpses])
             print 'starting training'
             for epoch in range(start_step + 1, max_iters):
                 start_time = time.time()
@@ -765,65 +681,16 @@ with tf.device('/gpu:1'):
 
                 feed_dict = {inputs_placeholder: nextX, labels_placeholder: nextY, \
                              onehot_labels_placeholder: dense_to_one_hot(nextY)}
-                #feed_dict = {inputs_placeholder: nextX}
 
-                #TODO: ignore everything in comment below this line before the double_loop.
-        #cost, reward_task, reward_aug, predicted_labels, correct_labels, train_op, b, avg_b, rminusb, lr = calc_reward(outputs, glimpse_reps)
-
-                fetches = [train_op, cost, reward_task, reward_aug, r_intrinsic, predicted_labels, correct_labels, glimpse_images, avg_b, rminusb, \
+                #fetches = [train_op, cost, reward_task, reward_aug, reward_intrinsic, predicted_labels, correct_labels, glimpse_images, avg_b, rminusb, \
+                           #mean_locs, sampled_locs, lr, outputs, glimpse_reps]
+                denom = tf.get_default_graph().get_tensor_by_name('denominator:0')
+                fetches = [denom, train_op, cost, reward_task, reward_aug, reward_intrinsic, predicted_labels, correct_labels, glimpse_images, avg_b, rminusb, \
                            mean_locs, sampled_locs, lr, outputs, glimpse_reps]
                 # feed them to the model
                 results = sess.run(fetches, feed_dict=feed_dict)
 
-                # TODO: can we parallelize the intrinsic reward calculation? (it seems necessarily sequential)
-
-                ## do forward pass to get info needed for calc_reward
-                ## (probably memories)
-                #print 'doing some forward passing'
-                #forward_fetches = [outputs, glimpse_reps,
-                                   #glimpse_images, mean_locs, sampled_locs]
-                #forward_results = sess.run(forward_fetches,
-                                           #feed_dict=feed_dict)
-                #mem_vals, glimpse_rep_vals = forward_results[0:2]
-                #glimpse_images_fetched, mean_locs_fetched, \
-                    #sampled_locs_fetched = forward_results[2:]
-
-                ## update replay pool with this information.
-
-                ## calculate intrinsic reward (using forward pass info inserted
-                ## into placeholders).
-                #print 'calculating intrinsic rewards'
-                
-                #bnn.construct_int_reward(mem_vals, glimpse_rep_vals,\
-                                         #r_intrinsic_vals,start_time)
-                #print 'finished calculating intrinsic rewards'
-
-                ## do the bulk update using replay pool
-
-                ## do the train_op with intrinsic reward and data from forward
-                ## pass put into placeholders.
-                #print 'computing rest of fetches (training included)'
-                #rest_of_fetches = [train_op, cost, reward_task, reward_aug,
-                                   #predicted_labels, correct_labels,
-                                   #avg_b, rminusb, lr]
-
-                #feed_dict_back = {k: v for (k, v) in zip(outputs, mem_vals)}
-                #feed_dict_back[r_intrinsic_ph] = r_intrinsic_vals
-                #feed_dict_back[sampled_locs] = sampled_locs_fetched
-                #feed_dict_back[mean_locs] = mean_locs_fetched
-                #feed_dict_back[glimpse_images] = glimpse_images_fetched
-                #feed_dict_back[labels_placeholder] = nextY
-                #feed_dict_back[inputs_placeholder] = nextX
-                #feed_dict_back[onehot_labels_placeholder] = dense_to_one_hot(nextY)
-
-                #rest_of_results = sess.run(rest_of_fetches,
-                                           #feed_dict=feed_dict_back)
-
-                #_,cost_fetched, reward_task_fetched, reward_aug_fetched, \
-                    #predicted_labels_fetched, correct_labels_fetched, \
-                    #avg_b_fetched, rminusb_fetched, lr_fetched \
-                    #= rest_of_results
-                _, cost_fetched, reward_task_fetched, reward_aug_fetched, r_intrinsic_fetched, \
+                denom_fetched, _, cost_fetched, reward_task_fetched, reward_aug_fetched, r_intrinsic_fetched, \
                     prediction_labels_fetched, correct_labels_fetched, \
                     glimpse_images_fetched, avg_b_fetched, \
                     rminusb_fetched, mean_locs_fetched, \
@@ -832,15 +699,11 @@ with tf.device('/gpu:1'):
                 duration = time.time() - start_time
 
                 if epoch % 20 == 0:
-                    r_intrinsic_vals = reward_aug_fetched - reward_task_fetched
+                    print denom_fetched
                     print(('Step %d: cost = %.5f reward_task = %.5f reward_aug = %.5f reward_intrinsic = %.5f (%.3f sec) b = %.5f R-b = %.5f, LR = %.5f'
                           % (epoch, cost_fetched, reward_task_fetched,
                              reward_aug_fetched, r_intrinsic_fetched, duration, avg_b_fetched,
                              rminusb_fetched, lr_fetched)))
-                    #print 'x,y'
-                    #print nextX, nextY
-                    #print 'r_int'
-                    #print r_intrinsic_fetched
                     # TODO: bring this back in.
                     #summary_str = sess.run(summary_op, feed_dict=feed_dict)
                     #summary_writer.add_summary(summary_str, epoch)
