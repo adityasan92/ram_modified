@@ -8,6 +8,9 @@ import sys
 import os
 
 add_intrinsic_reward = True
+translateMnist = 1
+
+print("Running concrete dropout")
 
 try:
     xrange
@@ -47,9 +50,7 @@ draw = False
 animate = False
 
 # conditions
-translateMnist = 1
 eyeCentered = 0
-
 preTraining = 0
 preTraining_epoch = 20000
 drawReconsturction = 0
@@ -294,7 +295,7 @@ def model():
                 # weights below and not use the REUSE flag?
                 #hiddenState = tf.nn.relu(affineTransform(hiddenState_prev, cell_size) + (tf.matmul(glimpse, Wc_g_h) + Bc_g_h))
                 pre_hidden = tf.matmul(hiddenState_prev, Wc_h_h) + Bc_h_h
-                print(pre_hidden.get_shape().as_list(),"pre hidden state shape")
+                #print(pre_hidden.get_shape().as_list(),"pre hidden state shape")
                 dropout_pre_hidden = tf.multiply(noise_hidden,pre_hidden)
                 glimpse_input = (tf.matmul(glimpse, Wc_g_h) + Bc_g_h)
                 dropout_glimpse_input = tf.multiply(noise_input,glimpse_input) #concrete_dropout(glimpse_input, dropout_probability_input)
@@ -312,12 +313,12 @@ def model():
         
         # Save variances
         tensor_locs = tf.stack(forward_loc)
-        print(tensor_locs.get_shape().as_list(),"tensor_loc")
+        #print(tensor_locs.get_shape().as_list(),"tensor_loc")
         mean, variances = tf.nn.moments(tensor_locs,[0])
-        print(mean.get_shape().as_list(),"means")
-        print(variances.get_shape().as_list(),"variances")
+        #print(mean.get_shape().as_list(),"means")
+        #print(variances.get_shape().as_list(),"variances")
         total_variance =  tf.reduce_mean(variances, axis=1) + tau
-        print(total_variance.get_shape().as_list(),"total variance")
+        #print(total_variance.get_shape().as_list(),"total variance")
         variances_locations.append(total_variance)
    
         # save the current glimpse and the hidden state
@@ -329,7 +330,6 @@ def model():
             # next_location_passes.append(loc)
             #print(loc.get_shape().as_list())
             #def tt():
-            #  print('FUCCCCCCCCCCCCCking nan')  
             #  return True
             #res = tf.cond(tf.is_nan(tf.reduce_mean(loc)), tt, lambda: False)
             
@@ -342,7 +342,7 @@ def model():
             baseline = tf.sigmoid(tf.matmul(first_hiddenState, Wb_h_b) + Bb_h_b)
             baselines.append(baseline)
     
-    print(str(variances_locations),"variances_locations")
+    #print(str(variances_locations),"variances_locations")
     return outputs,variances_locations
 
 
@@ -395,7 +395,7 @@ def calc_reward(outputs, dropout_reward):
     # rather the timesteps KL-based intrinsic reward.
     # TODO: ensure that indexing over R_intrinsic is not shifted by 1.
     R = tf.tile(R, [1, (nGlimpses)])
-    print(R.get_shape().as_list(), "reward shape")
+    #print(R.get_shape().as_list(), "reward shape")
     r_intrinsic = tf.transpose(dropout_reward) # TODO: change this line.
     R_intrinsic = [tf.zeros([batch_size]) for _ in xrange(nGlimpses)]
     R_intrinsic[-1] = r_intrinsic[:,-1]
@@ -736,8 +736,8 @@ with tf.device('/gpu:1'):
                     if epoch % 1000 == 0:
                         saver.save(sess, save_dir + save_prefix + str(epoch) + ".ckpt")
                         print("Dropout reward",str(dropout_reward_fetched), "Total Reward",total_reward_fetched)
-                        print("dropout_pre_hidden_fetched", str(dropout_probability_hidden_fetched))
-                        print("dropout_pre_input_fetched", str(dropout_probability_input_fetched))
+                        #print("dropout_pre_hidden_fetched", str(dropout_probability_hidden_fetched))
+                        #print("dropout_pre_input_fetched", str(dropout_probability_input_fetched))
                         evaluate()
 
                     ##### DRAW WINDOW ################

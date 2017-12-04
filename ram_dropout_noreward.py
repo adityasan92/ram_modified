@@ -21,7 +21,6 @@ summaryFolderName = "summary/"
 # Disable GPU
 os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
-
 if len(sys.argv) == 2:
     simulationName = str(sys.argv[1])
     print("Simulation name = " + simulationName)
@@ -265,7 +264,7 @@ def affineTransform(x,output_dim):
 
 def model():
 
-    dropout_prob = 0.5
+    dropout_prob = 1.0
 
     # initialize the location under unif[-1,1], for all example in the batch
     initial_loc = tf.random_uniform((batch_size, 2), minval=-1, maxval=1)
@@ -285,11 +284,10 @@ def model():
     glimpse = initial_glimpse
     REUSE = None
 
-
     dropout_input_mask =  tf.cast(
-        tf.contrib.distributions.Bernoulli(tf.constant(np.ones((1,g_size,noOfForwardPasses)) * dropout_prob )).sample(), tf.float32)
+        tf.contrib.distributions.Bernoulli(tf.constant(np.ones((1,g_size,noOfForwardPasses)) * (1.0 - dropout_prob) )).sample(), tf.float32)
     dropout_hidden_mask =  tf.cast(
-        tf.contrib.distributions.Bernoulli(tf.constant(np.ones((1,cell_size,noOfForwardPasses)) * dropout_prob)).sample(), tf.float32)
+        tf.contrib.distributions.Bernoulli(tf.constant(np.ones((1,cell_size,noOfForwardPasses)) * (1.0 - dropout_prob) )).sample(), tf.float32)
     variances_locations = []
     tau = tf.cast(tf.constant((1.0 - dropout_prob)*np.ones(batch_size)),tf.float32)
     # TODO: Create use dropout with seed 

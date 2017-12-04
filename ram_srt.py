@@ -8,13 +8,15 @@ import sys
 import os
 
 ### Parameter Flags for Stochastic Regularization ###
-add_intrinsic_reward = False
-stochastic_regularization_type = 'D'
-noOfForwardPasses = 5
-dropout_prob = 0.5
-translateMnist = 0
+add_intrinsic_reward = True # True vs False
+stochastic_regularization_type = 'D' # 'D' = dropout, 'MG' = multiplicative gaussian
+noOfForwardPasses = 5 # Leave as 5
+dropout_prob = 0.5 # One of [0.25, 0.5, 0.75]
+translateMnist = 0 # 0 or 1
 
-# 'D' = dropout, 'MG' = multiplicative gaussian
+print('Using NumForwardPasses = ' + str(noOfForwardPasses))
+print('DropoutProb = ' + str(dropout_prob))
+print('StochRegType = ' + stochastic_regularization_type)
 
 try:
     xrange
@@ -260,9 +262,9 @@ def model():
 
     if stochastic_regularization_type == 'D':
        dropout_input_mask =  tf.cast(
-         tf.contrib.distributions.Bernoulli(tf.constant(np.ones((1,g_size,noOfForwardPasses)) * dropout_prob )).sample(), tf.float32)
+         tf.contrib.distributions.Bernoulli(probs=tf.constant(np.ones((1,g_size,noOfForwardPasses)) * (1.0 - dropout_prob) )).sample(), tf.float32)
        dropout_hidden_mask =  tf.cast(
-         tf.contrib.distributions.Bernoulli(tf.constant(np.ones((1,cell_size,noOfForwardPasses)) * dropout_prob)).sample(), tf.float32)
+         tf.contrib.distributions.Bernoulli(probs=tf.constant(np.ones((1,cell_size,noOfForwardPasses)) * (1.0 - dropout_prob) )).sample(), tf.float32)
     elif stochastic_regularization_type == 'MG':
        MG_param_input = tf.constant(np.ones((1,g_size,noOfForwardPasses)))
        MG_param_hidden = tf.constant(np.ones((1,cell_size,noOfForwardPasses)))
@@ -385,7 +387,9 @@ def calc_reward(outputs, dropout_reward):
     # TODO: ensure that indexing over R_intrinsic is not shifted by 1.
     R = tf.tile(R, [1, (nGlimpses)])
     #print(R.get_shape().as_list(), "reward shape")
-    r_intrinsic = tf.transpose(dropout_reward) # TODO: change this line.
+    #r_intrinsic = tf.stop_gradient( tf.transpose(dropout_reward) ) 
+    
+    r_intrinsic = tf.transpose(dropout_reward)  
     R_intrinsic = [tf.zeros([batch_size]) for _ in xrange(nGlimpses)]
     R_intrinsic[-1] = r_intrinsic[:,-1]
     for g_id in xrange(nGlimpses-2, -1, -1):
@@ -712,7 +716,7 @@ with tf.device('/gpu:1'):
                     # if saveImgs:
                     #     plt.savefig(imgsFolderName + simulationName + '_ep%.6d.png' % (epoch))
 
-                    if epoch % 1000 == 0:
+                    if epoch % 500 == 0:
                         saver.save(sess, save_dir + save_prefix + str(epoch) + ".ckpt")
                         evaluate()
 

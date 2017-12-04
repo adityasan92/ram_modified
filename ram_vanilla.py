@@ -7,6 +7,9 @@ import random
 import sys
 import os
 
+translateMnist = 1
+
+print('Running vanilla RAM')
 
 try:
     xrange
@@ -46,7 +49,6 @@ draw = False
 animate = False
 
 # conditions
-translateMnist = 1
 eyeCentered = 0
 
 preTraining = 0
