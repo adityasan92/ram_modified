@@ -8,7 +8,7 @@ import sys, os
 
 add_intrinsic_reward = True
 translateMnist = 1
-eta = 1.0
+eta = 4.0
 
 print("Running concrete dropout")
 
