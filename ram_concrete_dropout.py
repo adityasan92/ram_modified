@@ -4,11 +4,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import time
 import random
-import sys
-import os
+import sys, os
 
 add_intrinsic_reward = True
 translateMnist = 1
+eta = 1.0
 
 print("Running concrete dropout")
 
@@ -35,10 +35,18 @@ if len(sys.argv) == 2:
         os.mkdir(summaryFolderName)
     # if os.path.isdir(imgsFolderName) == False:
     #     os.mkdir(imgsFolderName)
+    accFile = simulationName + '.log'
+    if os.path.isfile( accFile ): # Race :)
+       print('Output log already exists. Choose a different name.')
+       sys.exit(0)
+    print('Writing to '+accFile)
 else:
     saveImgs = False
     print("Testing... image files will not be saved.")
-
+    
+    # Force specification of output
+    print('You must specify an output name')
+    sys.exit(0)
 
 start_step = 0
 #load_path = None
@@ -313,13 +321,17 @@ def model():
         
         # Save variances
         tensor_locs = tf.stack(forward_loc)
-        #print(tensor_locs.get_shape().as_list(),"tensor_loc")
+        print(tensor_locs.get_shape().as_list(),"tensor_loc")
         mean, variances = tf.nn.moments(tensor_locs,[0])
+        xs = tensor_locs[:,:,0]
+        ys = tensor_locs[:,:,1]
+        cov_xy = 1 / (tf.cast(tf.shape(xs)[0],tf.float32)) * tf.reduce_sum( (xs - tf.reduce_mean(xs, 0)) * (ys - tf.reduce_mean(ys, 0)), 0)
         #print(mean.get_shape().as_list(),"means")
-        #print(variances.get_shape().as_list(),"variances")
-        total_variance =  tf.reduce_mean(variances, axis=1) + tau
+        print(variances.get_shape().as_list(),"variances")
+        #total_variance =  tf.reduce_mean(variances, axis=1) + tau
+        final_reward = eta*tf.log( tf.multiply( variances[:,0]+tau, variances[:,1]+tau ) - tf.multiply( cov_xy, cov_xy ) ) 
         #print(total_variance.get_shape().as_list(),"total variance")
-        variances_locations.append(total_variance)
+        variances_locations.append(final_reward) #(total_variance)
    
         # save the current glimpse and the hidden state
         inputs[t] = glimpse
@@ -446,7 +458,7 @@ def preTrain(outputs):
     return reconstructionCost, reconstruction, train_op_r
 
 
-def evaluate():
+def evaluate(print_acc=True, write_acc=True, epoch=None):
     data = dataset.test
     batches_in_epoch = len(data._images) // batch_size
     accuracy = 0
@@ -462,8 +474,12 @@ def evaluate():
         accuracy += r
 
     accuracy /= batches_in_epoch
-    print(("ACCURACY: " + str(accuracy)))
-
+    if print_acc: print(("ACCURACY: " + str(accuracy)))
+    if write_acc:
+       with open(accFile, 'a') as f:
+          if epoch is None: f.write( str(accuracy) + '\n' )
+          else: f.write( str(epoch) + ',' + str(accuracy) + '\n' )
+          f.flush()
 
 def convertTranslated(images, initImgSize, finalImgSize):
     size_diff = finalImgSize - initImgSize
@@ -733,12 +749,12 @@ with tf.device('/gpu:1'):
                     # if saveImgs:
                     #     plt.savefig(imgsFolderName + simulationName + '_ep%.6d.png' % (epoch))
 
-                    if epoch % 1000 == 0:
+                    if epoch % 500 == 0:
                         saver.save(sess, save_dir + save_prefix + str(epoch) + ".ckpt")
                         print("Dropout reward",str(dropout_reward_fetched), "Total Reward",total_reward_fetched)
                         #print("dropout_pre_hidden_fetched", str(dropout_probability_hidden_fetched))
                         #print("dropout_pre_input_fetched", str(dropout_probability_input_fetched))
-                        evaluate()
+                        evaluate(epoch=epoch)
 
                     ##### DRAW WINDOW ################
                     f_glimpse_images = np.reshape(glimpse_images_fetched, \
