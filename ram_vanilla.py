@@ -1,14 +1,48 @@
 import tensorflow as tf
 import tf_mnist_loader
 import matplotlib.pyplot as plt
-import numpy as np
 import time
 import random
-import sys
 import os
+import sys
+import getopt
+import numpy as np
 
-translateMnist = 1
 
+#translateMnist = str(0)
+#dropout_prob= str(0.5)
+#add_intrinsic_reward = 'False'
+#srt_type = 'D'
+#index = '0'
+#save_path = os.path.dirname(os.path.realpath(__file__))+'/'+index
+
+
+options, remainder = getopt.getopt(sys.argv[1:], '',['save_path=',
+                                                  'translate=',
+                                                  'dropout_prob=',
+                                                  'add_intrinsic_reward=',
+                                                  'srt_type='
+                                                    ])
+
+
+for opt, arg in options:
+    print(opt, arg)
+    if opt == '--save_path':
+        save_path = arg
+    if opt == '--index':
+        index = arg
+        print('index:', index)
+    if opt == '--translate':
+        translateMnist = int(arg)
+    if opt == '--dropout_prob':
+        dropout_prob = float(arg)
+    if opt == '--add_intrinsic_reward':
+        add_intrinsic_reward = arg
+    if opt == '--srt_type':
+        srt_type = arg
+
+
+print(options)
 print('Running vanilla RAM')
 
 try:
@@ -17,7 +51,7 @@ except NameError:
     xrange = range
 
 dataset = tf_mnist_loader.read_data_sets("mnist_data")
-save_dir = "chckPts/"
+#save_dir = "chckPts/"
 save_prefix = "save"
 summaryFolderName = "summary/"
 
@@ -41,7 +75,7 @@ else:
 
 start_step = 0
 #load_path = None
-load_path = save_dir + save_prefix + str(start_step) + ".ckpt"
+#load_path = save_dir + save_prefix + str(start_step) + ".ckpt"
 # to enable visualization, set draw to True
 load_model = False
 eval_only = False
@@ -107,7 +141,9 @@ cell_out_size = cell_size   #
 n_classes = 10              # card(Y)
 
 # training parameters
-max_iters = 1000000
+max_iters = 500000
+accuracy = np.zeros(max_iters+1)
+np.save(save_path, accuracy)
 SMALL_NUM = 1e-10
 
 # resource prellocation
@@ -392,7 +428,7 @@ def evaluate():
 
     accuracy /= batches_in_epoch
     print(("ACCURACY: " + str(accuracy)))
-
+    return accuracy
 
 def convertTranslated(images, initImgSize, finalImgSize):
     size_diff = finalImgSize - initImgSize
@@ -648,9 +684,10 @@ with tf.device('/gpu:1'):
                     # if saveImgs:
                     #     plt.savefig(imgsFolderName + simulationName + '_ep%.6d.png' % (epoch))
 
-                    if epoch % 1000 == 0:
-                        saver.save(sess, save_dir + save_prefix + str(epoch) + ".ckpt")
-                        evaluate()
+                    if epoch % 500 == 0:
+                        #saver.save(sess, save_dir + save_prefix + str(epoch) + ".ckpt")
+                        accuracy[epoch] = evaluate()
+                        np.save(save_path, accuracy)
 
                     ##### DRAW WINDOW ################
                     f_glimpse_images = np.reshape(glimpse_images_fetched, \
