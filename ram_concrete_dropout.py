@@ -35,11 +35,14 @@ if len(sys.argv) == 2:
         os.mkdir(summaryFolderName)
     # if os.path.isdir(imgsFolderName) == False:
     #     os.mkdir(imgsFolderName)
-    accFile = simulationName + '.log'
+    accFile = simulationName + '-accuracies.log'
+    dropoutHiddenFile = simulationName + '-hiddenProbs.log'
+    dropoutInputFile = simulationName + '-inputProbs.log'
+    dropoutRewardsFile = simulationName + '-dropoutRewards.log'
     if os.path.isfile( accFile ): # Race :)
        print('Output log already exists. Choose a different name.')
        sys.exit(0)
-    print('Writing to '+accFile)
+    print('Writing to ' + accFile)
 else:
     saveImgs = False
     print("Testing... image files will not be saved.")
@@ -458,11 +461,12 @@ def preTrain(outputs):
     return reconstructionCost, reconstruction, train_op_r
 
 
-def evaluate(print_acc=True, write_acc=True, epoch=None):
+def evaluate(print_acc=True, write_acc=True, epoch=None, writeDropoutProbs=True,dropProbHidden=None,dropProbInput=None,dropoutReward=None):
     data = dataset.test
     batches_in_epoch = len(data._images) // batch_size
     accuracy = 0
 
+    #evaluate(epoch=epoch,dropProbHidden=dropout_probability_hidden,dropProbInput=dropout_probability_input,dropoutReward=dropout_reward)
     for i in range(batches_in_epoch):
         nextX, nextY = dataset.test.next_batch(batch_size)
         if translateMnist:
@@ -480,6 +484,16 @@ def evaluate(print_acc=True, write_acc=True, epoch=None):
           if epoch is None: f.write( str(accuracy) + '\n' )
           else: f.write( str(epoch) + ',' + str(accuracy) + '\n' )
           f.flush()
+    if writeDropoutProbs:
+       with open(dropoutHiddenFile, 'a') as fp:
+          fp.write( str(epoch) + ',' + str(dropProbHidden) + '\n')
+          fp.flush()
+       with open(dropoutInputFile, 'a') as fp:
+          fp.write( str(epoch) + ',' + str(dropProbInput) + '\n')
+          fp.flush()
+       with open(dropoutRewardsFile, 'a') as fp:
+          fp.write( str(epoch) + ',' + str(dropoutReward) + '\n')
+          fp.flush()
 
 def convertTranslated(images, initImgSize, finalImgSize):
     size_diff = finalImgSize - initImgSize
@@ -754,7 +768,7 @@ with tf.device('/gpu:1'):
                         print("Dropout reward",str(dropout_reward_fetched), "Total Reward",total_reward_fetched)
                         #print("dropout_pre_hidden_fetched", str(dropout_probability_hidden_fetched))
                         #print("dropout_pre_input_fetched", str(dropout_probability_input_fetched))
-                        evaluate(epoch=epoch)
+                        evaluate(epoch=epoch,dropProbHidden=dropout_probability_hidden_fetched,dropProbInput=dropout_probability_input_fetched,dropoutReward=dropout_reward_fetched)
 
                     ##### DRAW WINDOW ################
                     f_glimpse_images = np.reshape(glimpse_images_fetched, \
