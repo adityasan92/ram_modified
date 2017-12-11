@@ -1,0 +1,6 @@
+WARNING:tensorflow:From ram_srt.py:391: arg_max (from tensorflow.python.ops.gen_math_ops) is deprecated and will be removed in a future version.
+Instructions for updating:
+Use `argmax` instead
+2017-12-10 00:26:21.153807: I tensorflow/core/platform/cpu_feature_guard.cc:137] Your CPU supports instructions that this TensorFlow binary was not compiled to use: SSE4.1 SSE4.2 AVX
+terminate called after throwing an instance of 'std::system_error'
+  what():  Resource temporarily unavailable
