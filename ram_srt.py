@@ -8,11 +8,11 @@ import sys
 import os
 
 ### Parameter Flags for Stochastic Regularization ###
-add_intrinsic_reward = True # True vs False
+add_intrinsic_reward = False # True vs False
 stochastic_regularization_type = 'D' # 'D' = dropout, 'MG' = multiplicative gaussian
 noOfForwardPasses = 5 # Leave as 5
-dropout_prob = 0.5 # One of [0.25, 0.5, 0.75]
-translateMnist = 0 # 0 or 1
+dropout_prob = 0.75 # One of [0.25, 0.5, 0.75]
+translateMnist = 1 # 0 or 1
 eta = 4.0
 
 
@@ -126,7 +126,7 @@ cell_out_size = cell_size   #
 n_classes = 10              # card(Y)
 
 # training parameters
-max_iters = 1000000
+max_iters = 200000 #1000000
 SMALL_NUM = 1e-10
 
 # resource prellocation
