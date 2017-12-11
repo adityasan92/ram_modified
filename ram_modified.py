@@ -45,7 +45,7 @@ draw = False
 animate = False
 
 # conditions
-translateMnist = 1
+translateMnist = 0
 eyeCentered = 0
 
 preTraining = 0
@@ -73,7 +73,7 @@ if translateMnist:
     momentumValue = .9
     #batch_size = 64
     # TODO: put this back.
-    batch_size = 2
+    batch_size = 64
 
 else:
     print("CENTERED MNIST")
@@ -87,12 +87,17 @@ else:
     lrDecayFreq = 200
     momentumValue = .9
     batch_size = 20
+    batch_size = 10
+    batch_size = 5
+    # batch_size = 2
+    batch_size = 1
 
 
 # model parameters
 channels = 1                # mnist are grayscale images
 totalSensorBandwidth = depth * channels * (sensorBandwidth **2)
 nGlimpses = 6               # number of glimpses
+nGlimpses = 2               # number of glimpses
 nGlimpses = 3 # TODO: remove this.
 loc_sd = 0.22               # std when setting the location
 
@@ -519,7 +524,11 @@ with tf.device('/gpu:1'):
         print 'creating bnn...'
         # create mother BNN + its children (the workers over batch and time)
         mother = transition_model(g_prev_ph,h_prev_ph, h_out_ph, cell_size, -1)
-        mother.inference.initialize(n_iter=500, n_samples=5, scale={mother.s: (10./500)})
+        var_list = tf.trainable_variables(scope=mother.scope)
+        with tf.variable_scope(mother.scope):
+            mother.inference.initialize(n_iter=500, n_samples=5,
+                                        scale={mother.s: (10./500)},
+                                        var_list=var_list)
         mother.inf_ops = [mother.inference.train,
                           mother.inference.increment_t,
                           mother.inference.loss]
@@ -535,21 +544,24 @@ with tf.device('/gpu:1'):
                 s_prev = tf.stop_gradient(outputs[t][tf.newaxis,b, :])
                 a_prev = tf.stop_gradient(glimpse_reps[t][tf.newaxis,b, :])
                 s_new = tf.stop_gradient(outputs[t+1][tf.newaxis,b, :])
-                bnn = transition_model(a_prev, s_prev,
+                child = transition_model(a_prev, s_prev,
                                        s_new, cell_size,
                                        worker_id, mother)
                 worker_id += 1
-                children[(b, t)] = bnn
+                children[(b, t)] = child
 
                 # we ensure that training occurs before attempting
                 # to compute the intrinsic rewards.
                 print b,t
-                with tf.control_dependencies([bnn.glimpse_update]):
-                    traj_rewards[t] = bnn.kl_to_mother()
-
+                # with tf.control_dependencies([bnn.glimpse_update]):
+                with tf.control_dependencies(child.glimpse_update):
+                    traj_rewards[t] = child.kl_to_mother()
 
             # stack into intrinsics over traj
+            traj_rewards = tf.tuple(traj_rewards)
             batch_rewards[b] = tf.stack(traj_rewards)
+
+        batch_rewards = tf.tuple(batch_rewards)
         r_intrinsic = tf.stop_gradient(tf.stack(batch_rewards, axis=0))
 
         # normalize the r_intrinsic
@@ -559,7 +571,8 @@ with tf.device('/gpu:1'):
             m = v.get_shape()[0]//2
             return tf.nn.top_k(v, m).values[m-1]
         med = get_median(r_intrinsic)
-        r_intrinsic = r_intrinsic/med
+        r_intrinsic = r_intrinsic/(med + SMALL_NUM)
+        # r_intrinsic = r_intrinsic/(med)
         print 'done creating models'
 
 
@@ -680,6 +693,11 @@ with tf.device('/gpu:1'):
 
             # training
             print 'starting training'
+            mother_reverts = [children[(b,t)].revert_to_mother_ops for b in
+                              xrange(batch_size) for t in xrange(nGlimpses)]
+            train_inits = [children[(b,t)].init_train for b in
+                              xrange(batch_size) for t in xrange(nGlimpses)]
+            # sess.run(mother_reverts)
             for epoch in range(start_step + 1, max_iters):
                 start_time = time.time()
 
@@ -694,12 +712,24 @@ with tf.device('/gpu:1'):
 
                 #fetches = [train_op, cost, reward_task, reward_aug, reward_intrinsic, predicted_labels, correct_labels, glimpse_images, avg_b, rminusb, \
                            #mean_locs, sampled_locs, lr, outputs, glimpse_reps]
-                fetches = [train_op, cost, reward_task, reward_aug, reward_intrinsic, predicted_labels, correct_labels, glimpse_images, avg_b, rminusb, \
+                first_m = children[(0,2)].first_mean
+                infops = children[(0,2)].glimpse_update
+                mother_first_m =mother.first_mean
+                fetches = [infops,med,first_m,mother_first_m,train_op, cost, reward_task, reward_aug, reward_intrinsic, predicted_labels, correct_labels, glimpse_images, avg_b, rminusb, \
                            mean_locs, sampled_locs, lr, outputs, glimpse_reps]
                 # feed them to the model
+                # key_lookup = tf.GraphKeys.TRAINABLE_VARIABLES
+                # weights_mother = tf.get_collection(key_lookup, scope=mother.scope)
+                # mother_v = sess.run(weights_mother)
+                # mother_reverts = \
+                # [children[(b,t)].construct_revert_to_mother_ops(mother_v) for b in
+                                  # xrange(batch_size) for t in xrange(nGlimpses)]
+                # sess.run(mother_reverts)
+                sess.run(train_inits)
                 results = sess.run(fetches, feed_dict=feed_dict)
 
-                _, cost_fetched, reward_task_fetched, reward_aug_fetched, r_intrinsic_fetched, \
+                infops_fetch,med_fetched,first_m_fetched,\
+                mother_first_m_fetched,_, cost_fetched, reward_task_fetched, reward_aug_fetched, r_intrinsic_fetched, \
                     prediction_labels_fetched, correct_labels_fetched, \
                     glimpse_images_fetched, avg_b_fetched, \
                     rminusb_fetched, mean_locs_fetched, \
@@ -722,22 +752,31 @@ with tf.device('/gpu:1'):
                 mother_batch_size = 10 # pool_batch_size
                 min_pool_size = 500 # same (dont train unless pool filled)
                 if epoch % 20 == 0 and min_pool_size <= pool._size:
-                    sess.run(tf.assign(eta, 1.0))
                     for _ in xrange(mother_epochs):
                         mother_batch = pool.random_batch(mother_batch_size)
                         #print mother_batch['actions'].shape
                         #print mother_batch['observations'].shape
                         #print mother_batch['next_observations'].shape
-                        feed_dict = {g_prev_ph: mother_batch['actions'],
+                        feed_dict_mother = {g_prev_ph: mother_batch['actions'],
                                      h_prev_ph: mother_batch['observations'],
                                      h_out_ph: mother_batch['next_observations']}
                         #sess.run(mother.inf_ops, feed_dict=feed_dict)
                         #mother.inference.run(feed_dict=feed_dict)
-                        mother.inference.update(feed_dict)
+                        # mother.inference.update(feed_dict_mother)
+                if epoch == 20:
+                    print 'changing eta to 1'
+                    sess.run(tf.assign(eta, 1.0))
 
                 duration = time.time() - start_time
 
                 if epoch % 20 == 0:
+                    print 'first ms (child and mother)'
+                    print first_m_fetched
+                    print mother_first_m_fetched
+                    print 'median of intrinsic'
+                    print med_fetched
+                    print ' infops of first child'
+                    print infops_fetch
                     print(('Step %d: cost = %.5f reward_task = %.5f reward_aug = %.5f reward_intrinsic = %.5f (%.3f sec) b = %.5f R-b = %.5f, LR = %.5f'
                           % (epoch, cost_fetched, reward_task_fetched,
                              reward_aug_fetched, r_intrinsic_fetched, duration, avg_b_fetched,
