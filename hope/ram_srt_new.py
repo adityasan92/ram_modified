@@ -429,6 +429,7 @@ def calc_reward(outputs, dropout_reward):
     p_loc = tf.reshape(p_loc, (batch_size, (nGlimpses) * 2))
 
     # define the cost function
+    weight_reg_strength = 0.0001
     reinforce_terms = tf.log(p_loc + SMALL_NUM) * (R-no_grad_b)
     #J = tf.concat(axis=1, values=[tf.log(p_y + SMALL_NUM) * (onehot_labels_placeholder), tf.log(p_loc + SMALL_NUM) * (R - no_grad_b)])
     J = tf.concat(axis=1, values=[tf.log(p_y + SMALL_NUM) * (onehot_labels_placeholder), reinforce_terms])
