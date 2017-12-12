@@ -395,11 +395,11 @@ def calc_reward(outputs, dropout_reward):
 
     #r_intrinsic = tf.zeros(R.get_shape().as_list()) # TODO: change this line.
     # TODO: adit and tristan change from this input
-    r_int_np = tf.transpose(dropout_reward)  #np.zeros([batch_size,nGlimpses], np.float32)
+    #r_int_np = tf.transpose(dropout_reward)  #np.zeros([batch_size,nGlimpses], np.float32)
     #print(r_int_np.get_shape().as_list())
     #r_int_np[1, 1] = 1
     #r_int_np[1, 3] = 1
-    r_intrinsic = tf.constant(r_int_np)
+    r_intrinsic = tf.transpose(dropout_reward)
 
     R_intrinsic = [tf.zeros([batch_size]) for _ in xrange(nGlimpses)]
     R_intrinsic[-1] = r_intrinsic[:,-1]
@@ -415,8 +415,11 @@ def calc_reward(outputs, dropout_reward):
     #with sess.as_default():
         #print sess.run(R_intrinsic)
     #raise ValueError('yo')
+    if add_intrinsic_reward:
+       R += R_intrinsic
+    
+    total_reward = tf.reduce_mean(R)
 
-    R += R_intrinsic
     # get the location
 
     p_loc = gaussian_pdf(mean_locs, sampled_locs)
@@ -432,7 +435,8 @@ def calc_reward(outputs, dropout_reward):
     J = tf.reduce_sum(J, 1)
     J = J - tf.reduce_sum(tf.square(R - b), 1)
     J = tf.reduce_mean(J, 0)
-    cost = -J
+    L2_weight_sums = tf.nn.l2_loss(Wc_h_h) + tf.nn.l2_loss(Bc_h_h) + tf.nn.l2_loss(Wc_g_h) + tf.nn.l2_loss(Bc_g_h)
+    cost = -J + weight_reg_strength * L2_weight_sums
     var_list = tf.trainable_variables()
     grads = tf.gradients(cost, var_list)
     grads, _ = tf.clip_by_global_norm(grads, 0.5)
@@ -443,7 +447,7 @@ def calc_reward(outputs, dropout_reward):
     # train_op = optimizer.minimize(cost, global_step)
     train_op = optimizer.apply_gradients(zip(grads, var_list), global_step=global_step)
 
-    return cost, reward, max_p_y, correct_y, train_op, b, tf.reduce_mean(b), tf.reduce_mean(R - b), lr
+    return cost, reward, max_p_y, correct_y, train_op, b, tf.reduce_mean(b), tf.reduce_mean(R - b), lr, total_reward
 
 # def calc_reward(outputs, dropout_reward):
 #     # outputs are the sequence of hidden states.
