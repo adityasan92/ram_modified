@@ -648,17 +648,19 @@ with tf.device('/gpu:1'):
 
                 duration = time.time() - start_time
 
-                if epoch % 20 == 0:
+                if epoch % 100 == 0:
                     print(('Step %d: cost = %.5f reward = %.5f (%.3f sec) b = %.5f R-b = %.5f, LR = %.5f'
                           % (epoch, cost_fetched, reward_fetched, duration, avg_b_fetched, rminusb_fetched, lr_fetched)))
                     summary_str = sess.run(summary_op, feed_dict=feed_dict)
                     summary_writer.add_summary(summary_str, epoch)
+                    sys.stdout.flush()
                     # if saveImgs:
                     #     plt.savefig(imgsFolderName + simulationName + '_ep%.6d.png' % (epoch))
 
-                    if epoch % 1000 == 0:
+                    if epoch % 500 == 0:
                         saver.save(sess, save_dir + save_prefix + str(epoch) + ".ckpt")
                         evaluate()
+                        sys.stdout.flush()
 
                     ##### DRAW WINDOW ################
                     f_glimpse_images = np.reshape(glimpse_images_fetched, \
