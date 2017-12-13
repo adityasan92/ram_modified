@@ -379,20 +379,17 @@ def gaussian_pdf(mean, sample):
 
 
 def calc_reward(outputs, dropout_reward):
-    # outputs are the sequence of hidden states.
-    #print(dropout_reward.get_shape().as_list())
+
     # consider the action at the last time step
     outputs = outputs[-1] # look at ONLY THE END of the sequence
-    # TODO: (Grant) is this line necessary? Seems like its already this size
     outputs = tf.reshape(outputs, (batch_size, cell_out_size))
 
     dropout_reward = tf.convert_to_tensor(dropout_reward)
-
+    print(dropout_reward.get_shape().as_list())
     # get the baseline
     b = tf.stack(baselines)
     b = tf.concat(axis=2, values=[b, b])
-    b = tf.transpose(b, [1,0,2]) # 6,64,2 to 64,6,2
-
+    b = tf.reshape(b, (batch_size, (nGlimpses) * 2))
     no_grad_b = tf.stop_gradient(b)
 
     # get the action(classification)
@@ -404,38 +401,53 @@ def calc_reward(outputs, dropout_reward):
     R = tf.cast(tf.equal(max_p_y, correct_y), tf.float32)
     reward = tf.reduce_mean(R) # mean reward
     R = tf.reshape(R, (batch_size, 1))
+    R = tf.tile(R, [1, (nGlimpses)*2])
 
-    # We want to add the intrinsic rewards here.
-    # TODO: in future, dont add zero at each timestep over batch item, but
-    # rather the timesteps KL-based intrinsic reward.
-    # TODO: ensure that indexing over R_intrinsic is not shifted by 1.
-    R = tf.tile(R, [1, (nGlimpses)])
-    #print(R.get_shape().as_list(), "reward shape")
-    r_intrinsic = tf.transpose(dropout_reward) # TODO: change this line.
+    #r_intrinsic = tf.zeros(R.get_shape().as_list()) # TODO: change this line.
+    # TODO: adit and tristan change from this input
+    #r_int_np = tf.transpose(dropout_reward)  #np.zeros([batch_size,nGlimpses], np.float32)
+    #print(r_int_np.get_shape().as_list())
+    #r_int_np[1, 1] = 1
+    #r_int_np[1, 3] = 1
+    r_intrinsic = tf.transpose(dropout_reward)
+
     R_intrinsic = [tf.zeros([batch_size]) for _ in xrange(nGlimpses)]
     R_intrinsic[-1] = r_intrinsic[:,-1]
     for g_id in xrange(nGlimpses-2, -1, -1):
             R_intrinsic[g_id] = r_intrinsic[:,g_id] + R_intrinsic[g_id + 1]
     R_intrinsic = tf.stack(R_intrinsic, axis=1)
+    R_intrinsic = tf.expand_dims(R_intrinsic, 2) # duplicate across x,y
+    R_intrinsic = tf.tile(R_intrinsic, [1, 1, 2])
+    #print R_intrinsic.get_shape().as_list()
+
+    R_intrinsic = tf.reshape(R_intrinsic, [batch_size, 2*nGlimpses])
+    #sess = tf.Session()
+    #with sess.as_default():
+        #print sess.run(R_intrinsic)
+    #raise ValueError('yo')
     if add_intrinsic_reward:
-      R += R_intrinsic
-    R = tf.expand_dims(R, 2)
-    R = tf.tile(R, [1, 1, 2])
+       R += R_intrinsic
+    
     total_reward = tf.reduce_mean(R)
+
     # get the location
 
     p_loc = gaussian_pdf(mean_locs, sampled_locs)
+    # p_loc = tf.tanh(p_loc)
+
+    p_loc_orig = p_loc
+    p_loc = tf.reshape(p_loc, (batch_size, (nGlimpses) * 2))
 
     # define the cost function
-    reinforce_terms = tf.reshape(tf.log(p_loc + SMALL_NUM) * (R-no_grad_b), (batch_size, nGlimpses*2))
-    reinforce_reg_terms = tf.reshape(tf.square(R-b),(batch_size, nGlimpses*2))
-    J = tf.concat(axis=1, values=[ tf.log(p_y + SMALL_NUM) * (onehot_labels_placeholder),reinforce_terms])
+    weight_reg_strength = 0.0001
+    reinforce_terms = tf.log(p_loc + SMALL_NUM) * (R-no_grad_b)
+    #J = tf.concat(axis=1, values=[tf.log(p_y + SMALL_NUM) * (onehot_labels_placeholder), tf.log(p_loc + SMALL_NUM) * (R - no_grad_b)])
+    J = tf.concat(axis=1, values=[tf.log(p_y + SMALL_NUM) * (onehot_labels_placeholder), reinforce_terms])
     J = tf.reduce_sum(J, 1)
-    J = J - tf.reduce_sum(reinforce_reg_terms, 1)
+    J = J - tf.reduce_sum(tf.square(R - b), 1)
     J = tf.reduce_mean(J, 0)
-    weight_reg_strength = 0.001
-    L2_weight_reg_sums = tf.nn.l2_loss(Wc_h_h) + tf.nn.l2_loss(Bc_h_h) + tf.nn.l2_loss(Wc_g_h) + tf.nn.l2_loss(Bc_g_h)
-    cost = -J + weight_reg_strength * L2_weight_reg_sums
+    L2_weight_sums = tf.nn.l2_loss(Wc_h_h) + tf.nn.l2_loss(Bc_h_h) + tf.nn.l2_loss(Wc_g_h) + tf.nn.l2_loss(Bc_g_h)
+    cost = -J + weight_reg_strength * L2_weight_sums
     var_list = tf.trainable_variables()
     grads = tf.gradients(cost, var_list)
     grads, _ = tf.clip_by_global_norm(grads, 0.5)

@@ -1,0 +1,6 @@
+WARNING:tensorflow:From ram_srt.py:391: arg_max (from tensorflow.python.ops.gen_math_ops) is deprecated and will be removed in a future version.
+Instructions for updating:
+Use `argmax` instead
+2017-12-07 02:47:57.435563: I tensorflow/core/platform/cpu_feature_guard.cc:137] Your CPU supports instructions that this TensorFlow binary was not compiled to use: SSE4.1 SSE4.2 AVX
+WARNING:tensorflow:Ignoring: chckPts/save8000.ckpt.data-00000-of-00001; No such file or directory
+WARNING:tensorflow:Ignoring: chckPts/save110500.ckpt.meta; No such file or directory
