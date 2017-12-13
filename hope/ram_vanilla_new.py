@@ -7,7 +7,7 @@ import random
 import sys
 import os
 
-translateMnist = 1
+translateMnist = 0
 
 print('Running vanilla RAM')
 

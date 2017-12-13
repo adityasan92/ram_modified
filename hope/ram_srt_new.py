@@ -11,14 +11,15 @@ import os
 add_intrinsic_reward = False # True vs False
 stochastic_regularization_type = 'D' # 'D' = dropout, 'MG' = multiplicative gaussian
 noOfForwardPasses = 5 # Leave as 5
-dropout_prob = 0.75 # One of [0.25, 0.5, 0.75]
-translateMnist = 1 # 0 or 1
+dropout_prob = 0.25 # One of [0.25, 0.5, 0.75]
+translateMnist = 0 # 0 or 1
 eta = 4.0
-
 
 print('Using NumForwardPasses = ' + str(noOfForwardPasses))
 print('DropoutProb = ' + str(dropout_prob))
 print('StochRegType = ' + stochastic_regularization_type)
+print('Reward = ' + str(add_intrinsic_reward))
+sys.stdout.flush()
 
 try:
     xrange
